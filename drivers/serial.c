@@ -1,5 +1,4 @@
-// kernel/io.c
-// Contains all I/O functions
+// Backup COM1 serial functions if VGA fails
 #include "types.h"
 #include "ports.h"
 

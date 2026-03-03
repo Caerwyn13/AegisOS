@@ -1,7 +1,8 @@
 #include "keyboard.h"
 #include "irq.h"
 #include "ports.h"
-#include "serial.h"
+#include "shell.h"
+#include "vga.h"
 
 #define KEYBOARD_PORT 0x60
 
@@ -13,25 +14,17 @@ static const char scancode_map[] = {
 	'*', 0, ' '
 };
 
-static void keyboard_handler(registers_t* regs) {
-	(void)regs;
-	uint8_t scancode = inb(KEYBOARD_PORT);
-	print("KEY\n");
-	// Ignore key release (bit 7 set)
-	if (scancode & 0x80) 
-		return;
-
-	if (scancode < sizeof(scancode_map)) {
-		char c = scancode_map[scancode];
-		if (c) {
-			char str[2] = {c, 0};
-			print(str);
-		}
-	}
+static void keyboard_handler(registers_t *regs) {
+    (void)regs;
+    uint8_t scancode = inb(KEYBOARD_PORT);
+	
+    if (scancode & 0x80) return;
+    if (scancode < sizeof(scancode_map)) {
+        char c = scancode_map[scancode];
+        if (c) shell_handle_key(c);
+    }
 }
 
 void keyboard_init() {
-	print("Registering Keyboard IRQ");
 	irq_register(1, keyboard_handler);
-	print("Keyboard IRQ Registered");
 }
