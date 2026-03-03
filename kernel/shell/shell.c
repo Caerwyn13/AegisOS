@@ -29,33 +29,8 @@ static void cmd_clear() {
 }
 
 static void cmd_mem() {
-    uint32_t pages = pmm_free_pages();
-    uint32_t kb    = pages * 4;
-
-    // Simple number printing
-    char num[16];
-    int i = 0;
-    if (kb == 0) {
-        num[i++] = '0';
-    } else {
-        uint32_t tmp = kb;
-        int start = i; 
-        while (tmp > 0) {
-            num[i++] = '0' + (tmp % 10);
-            tmp /= 10;
-        }
-        // Reverse
-        int end = i - 1;
-        while (start < end) {
-            char t = num[start];
-            num[start++] = num[end];
-            num[end--] = t;
-        }
-    }
-    num[i] = 0;
-
     vga_print("Free memory: ");
-    vga_print(num);
+    vga_print_int(pmm_free_pages() * 4);
     vga_print(" KB\n");
 }
 

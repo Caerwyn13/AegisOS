@@ -80,3 +80,32 @@ void vga_print_colour(const char* str, vga_colour_t fg, vga_colour_t bg) {
     vga_print(str);
     colour = old;
 }
+
+void vga_print_int(uint32_t n) {
+    char buf[16];
+    int i = 0;
+    if (n == 0) {
+        vga_print("0");
+        return;
+    }
+    while (n > 0) {
+        buf[i++] = '0' + (n % 10);
+        n /= 10;
+    }
+    // reverse
+    int start = 0, end = i - 1;
+    while (start < end) {
+        char t = buf[start];
+        buf[start++] = buf[end];
+        buf[end--] = t;
+    }
+    buf[i] = 0;
+    vga_print(buf);
+}
+
+void vga_print_int_colour(uint32_t n, vga_colour_t fg, vga_colour_t bg) {
+    uint8_t old = colour;
+    vga_set_colour(fg, bg);
+    vga_print_int(n);
+    colour = old;
+}
