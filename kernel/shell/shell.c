@@ -5,9 +5,28 @@
 #include "ports.h"
 
 #define BUFFER_SIZE 256
+#define HISTORY_SIZE 10
+
+// Command history
+static char history[HISTORY_SIZE][BUFFER_SIZE];
+static int  history_count = 0;
+static int  history_index = -1;
 
 static char buf[BUFFER_SIZE];
 static int  buf_pos = 0;
+
+static void history_add(const char *cmd) {
+    if (history_count < HISTORY_SIZE) {
+        strcpy(history[history_count++], cmd);
+    } else {
+        // shift history up
+        int i;
+        for (i = 0; i < HISTORY_SIZE - 1; i++)
+            strcpy(history[i], history[i + 1]);
+        strcpy(history[HISTORY_SIZE - 1], cmd);
+    }
+    history_index = history_count;
+}
 
 static void print_prompt() {
     vga_print_colour("root@AegisOS", LIGHT_GREEN, BLACK);
@@ -69,17 +88,50 @@ void shell_handle_key(char c) {
     if (c == '\n') {
         vga_putchar('\n');
         buf[buf_pos] = 0;
-        if (buf_pos > 0)
+        if (buf_pos > 0) {
+            history_add(buf);
             execute(buf);
+        }
         buf_pos = 0;
+        history_index = history_count;
         print_prompt();
     } else if (c == '\b') {
         if (buf_pos > 0) {
             buf_pos--;
             vga_putchar('\b');
         }
+    } else if (c == ARROW_UP) {
+        if (history_index > 0) {
+            history_index--;
+            // clear current line
+            while (buf_pos > 0) {
+                buf_pos--;
+                vga_putchar('\b');
+            }
+            strcpy(buf, history[history_index]);
+            buf_pos = strlen(buf);
+            vga_print(buf);
+        }
+    } else if (c == ARROW_DOWN) {
+        if (history_index < history_count - 1) {
+            history_index++;
+            while (buf_pos > 0) {
+                buf_pos--;
+                vga_putchar('\b');
+            }
+            strcpy(buf, history[history_index]);
+            buf_pos = strlen(buf);
+            vga_print(buf);
+        } else {
+            // clear line
+            while (buf_pos > 0) {
+                buf_pos--;
+                vga_putchar('\b');
+            }
+            history_index = history_count;
+        }
     } else if (buf_pos < BUFFER_SIZE - 1) {
         buf[buf_pos++] = c;
-        vga_print((char[]){c, 0});
+        vga_print_colour((char[]){c, 0}, WHITE, BLACK);
     }
 }
