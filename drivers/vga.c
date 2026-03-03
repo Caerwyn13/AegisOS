@@ -1,6 +1,7 @@
 // Main display drivers
 #include "types.h"
 #include "vga.h"
+#include "ports.h"
 
 #define VGA_ADDRESS 0xB8000
 
@@ -8,6 +9,14 @@ static uint16_t* vga  = (uint16_t*)VGA_ADDRESS;
 static int cursor_x   = 0;
 static int cursor_y   = 0;
 static uint8_t colour = 0;
+
+void vga_update_cursor() {
+    uint16_t pos = cursor_y * VGA_WIDTH + cursor_x;
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (uint8_t)(pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
 
 static uint16_t make_entry(char c, uint8_t col) {
     return (uint16_t)c | ((uint16_t)col << 8);
@@ -38,6 +47,7 @@ void vga_clear() {
         vga[i] = make_entry(' ', colour);
     cursor_x = 0;
     cursor_y = 0;
+    vga_update_cursor();
 }
 
 void vga_set_colour(vga_colour_t fg, vga_colour_t bg) {
@@ -66,6 +76,7 @@ void vga_putchar(char c) {
         }
     }
     scroll();
+    vga_update_cursor();
 }
 
 void vga_print(const char* str) {
