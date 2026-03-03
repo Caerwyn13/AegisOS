@@ -80,7 +80,17 @@ static void execute(const char* cmd) {
 
 void shell_init() {
     vga_clear();
-    vga_print_colour("Welcome to AegisOS!\n\n", YELLOW, BLACK);
+    vga_print_colour(" ________  _______   ________  ___  ________  ________  ________\n", LIGHT_CYAN, BLACK);
+    vga_print_colour("|\\   __  \\|\\  ___ \\ |\\   ____\\|\\  \\|\\   ____\\|\\   __  \\|\\   ____\\\n", LIGHT_CYAN, BLACK);
+    vga_print_colour("\\ \\  \\|\\  \\ \\   __/|\\ \\  \\___|\\ \\  \\ \\  \\___|.\\ \\  \\|\\  \\ \\  \\___|_\n", LIGHT_CYAN, BLACK);
+    vga_print_colour(" \\ \\   __  \\ \\  \\_|/_\\ \\  \\  __\\ \\  \\ \\_____  \\ \\  \\\\\\  \\ \\_____  \\\n", LIGHT_CYAN, BLACK);
+    vga_print_colour("  \\ \\  \\ \\  \\ \\  \\_|\\ \\ \\  \\|\\  \\ \\  \\|____|\\  \\ \\  \\\\\\  \\|____|\\  \\\n", LIGHT_CYAN, BLACK);
+    vga_print_colour("   \\ \\__\\ \\__\\ \\_______\\ \\_______\\ \\__\\____\\_\\  \\ \\_______\\____\\_\\  \\\n", LIGHT_CYAN, BLACK);
+    vga_print_colour("    \\|__|\\|__|\\|_______||\\|_______||\\|__|\\_________\\|_______|\\|_________\\\n", LIGHT_CYAN, BLACK);
+    vga_print_colour("                                         \\|_________|        \\|_________|/\n", LIGHT_CYAN, BLACK);
+    vga_print("\n");
+    vga_print_colour("  Welcome to AegisOS!\n", YELLOW, BLACK);
+    vga_print_colour("  Type 'help' for a list of commands.\n\n", LIGHT_GREY, BLACK);
     print_prompt();
 }
 

@@ -7,7 +7,6 @@ static void (*handlers[16])(registers_t* regs);
 
 void irq_register(int irq, void (*handler)(registers_t* regs)) {
 	handlers[irq] = handler;
-	print("Unmasking IRQ\n");
 	pic_unmask(irq);
 }
 
