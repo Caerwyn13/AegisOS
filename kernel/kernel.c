@@ -36,7 +36,7 @@ void kernel_main(multiboot_info_t* mbi) {
 	pmm_init(mbi);
 
 	print("Starting basic kernel shell interface...\n");
-	shell_init();
+	shell_init(mbi);
 
 	print("Enabling CPU interrupts (STI instruction)...\n");
 	__asm__ volatile ("sti");
