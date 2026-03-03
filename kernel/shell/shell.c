@@ -61,7 +61,7 @@ static void cmd_about() {
     vga_print_colour("========== ABOUT AegisOS ==========\n", LIGHT_CYAN, BLACK);
     vga_print("A simple x86 OS written solely by ");
     vga_print_colour("Caerwyn Sabin-Rees\n", YELLOW, BLACK);
-    vga_print("This OS began as a simple creative project but has now expanded into the time-consuming addition it is today!\n");
+    vga_print("This OS began as a simple creative project but has now expanded into the time-consuming addiction it is today!\n");
 }
 
 static void execute(const char* cmd) {
