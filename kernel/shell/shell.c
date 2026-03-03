@@ -2,6 +2,7 @@
 #include "vga.h"
 #include "string.h"
 #include "pmm.h"
+#include "ports.h"
 
 #define BUFFER_SIZE 256
 
@@ -17,6 +18,7 @@ static void print_prompt() {
 static void cmd_help() {
     vga_print_colour("Available commands:\n", YELLOW, BLACK);
     vga_print("  help  - show this message\n");
+    vga_print("  shutdown - shutdown the system\n");
     vga_print("  clear - clear the screen\n");
     vga_print("  mem   - show free memory\n");
     vga_print("  about - about this OS\n");
@@ -64,9 +66,15 @@ static void cmd_about() {
     vga_print("This OS began as a simple creative project but has now expanded into the time-consuming addiction it is today!\n");
 }
 
+static void cmd_shutdown() {
+    // QEMU specific shutdown via ACPI
+    outw(0x604, 0x2000);
+}
+
 static void execute(const char* cmd) {
     if (strcmp(cmd, "help") == 0) cmd_help();
     else if (strcmp(cmd, "clear") == 0) cmd_clear();
+    else if (strcmp(cmd, "shutdown") == 0) cmd_shutdown();
     else if (strcmp(cmd, "mem") == 0) cmd_mem();
     else if (strcmp(cmd, "about") == 0) cmd_about();
     else {
