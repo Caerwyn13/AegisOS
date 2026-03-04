@@ -34,11 +34,13 @@ static void scroll() {
             vga[i] = vga[i + VGA_WIDTH];
         for (i = (VGA_HEIGHT - 1) * VGA_WIDTH; i < VGA_HEIGHT * VGA_WIDTH; i++)
             vga[i] = make_entry(' ', colour);
+        cursor_y = VGA_HEIGHT - 1;
+        vga_update_cursor();
     }
 }
 
 void vga_init() {
-    colour = make_colour(LIGHT_GREY, BLACK);
+    colour = make_colour(WHITE, BLACK);
     vga_clear();
 }
 
@@ -234,4 +236,8 @@ void vga_printf_colour(vga_colour_t fg, vga_colour_t bg, const char *fmt, ...) {
 
     va_end(args);
     colour = old;
+}
+
+int vga_get_row() {
+    return cursor_y;
 }

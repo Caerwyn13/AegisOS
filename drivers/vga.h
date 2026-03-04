@@ -33,5 +33,6 @@ void vga_printf(const char *fmt, ...);
 void vga_printf_colour(vga_colour_t fg, vga_colour_t bg, const char *fmt, ...);
 void vga_set_colour(vga_colour_t fg, vga_colour_t bg);
 void vga_update_cursor();
+int  vga_get_row();
 
 #endif // VGA_H
