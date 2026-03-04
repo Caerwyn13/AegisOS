@@ -7,6 +7,8 @@
 #include "ports.h"
 #include "multiboot.h"
 #include "rtc.h"
+#include "aegisfs.h"
+#include "ata.h"
 
 #define BUFFER_SIZE  256
 #define HISTORY_SIZE 10
@@ -41,6 +43,11 @@ static const char *help_lines[] = {
     "  date                   - show the current date and time",
     "  hexdump <addr> [len]   - dump memory in hex",
     "  history                - show command history",
+    "  ls                     - list files",
+    "  cat <file>             - read a file",
+    "  write <file> <content> - write to a file",
+    "  rm <file>              - delete a file",
+    "  touch <file>           - create empty file",
     "  about                  - about AegisOS",
     "  reboot                 - reboot the system",
     "  shutdown               - shutdown the system",
@@ -124,6 +131,115 @@ static uint32_t parse_int(const char *str) {
 // ============================================================
 // Commands
 // ============================================================
+
+static void cmd_inodetest() {
+    fs_inode_t inode;
+    memset(&inode, 0, sizeof(inode));
+    strcpy(inode.name, "test.txt");
+    inode.size      = 42;
+    inode.start_lba = 17;
+    inode.used      = 1;
+
+    // write raw inode to LBA 1
+    uint8_t buf[512];
+    memset(buf, 0, 512);
+    memcpy(buf, &inode, sizeof(fs_inode_t));
+    ata_write(1, 1, buf);
+
+    // read it back
+    uint8_t buf2[512];
+    ata_read(1, 1, buf2);
+
+    fs_inode_t inode2;
+    memcpy(&inode2, buf2, sizeof(fs_inode_t));
+
+    vga_printf("name: %s\n",  inode2.name);
+    vga_printf("size: %u\n",  inode2.size);
+    vga_printf("lba:  %u\n",  inode2.start_lba);
+    vga_printf("used: %u\n",  inode2.used);
+    vga_printf("sizeof: %u\n", sizeof(fs_inode_t));
+}
+
+static void cmd_atatest() {
+    uint8_t buf[512];
+    // write a known pattern
+    int i;
+    for (i = 0; i < 512; i++)
+        buf[i] = i & 0xFF;
+    ata_write(1, 1, buf);
+
+    // read it back
+    uint8_t buf2[512];
+    ata_read(1, 1, buf2);
+
+    // check first 8 bytes
+    for (i = 0; i < 8; i++)
+        vga_printf("%x ", buf2[i]);
+    vga_printf("\n");
+}
+
+static void cmd_ls() {
+    fs_list();
+}
+
+static void cmd_cat() {
+    if (argc < 2) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: cat <file>\n");
+        return;
+    }
+    uint8_t *buf = (uint8_t *)kmalloc(FS_MAX_SIZE);
+    if (!buf) { vga_printf("Out of memory\n"); return; }
+
+    uint32_t size = 0;
+    if (fs_read(args[1], buf, &size) < 0) {
+        vga_printf_colour(LIGHT_RED, BLACK, "File not found: %s\n", args[1]);
+    } else {
+        buf[size] = 0;
+        vga_printf("%s\n", (char *)buf);
+    }
+    kfree(buf);
+}
+
+static void cmd_write() {
+    if (argc < 3) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: write <file> <content>\n");
+        return;
+    }
+    // join all args after filename into one string
+    char buf[BUFFER_SIZE];
+    memset(buf, 0, BUFFER_SIZE);
+    int i;
+    for (i = 2; i < argc; i++) {
+        strcat(buf, args[i]);
+        if (i < argc - 1) strcat(buf, " ");
+    }
+    if (fs_write(args[1], (uint8_t *)buf, strlen(buf)) < 0)
+        vga_printf_colour(LIGHT_RED, BLACK, "Failed to write file\n");
+    else
+        vga_printf("Written %u bytes to %s\n", strlen(buf), args[1]);
+}
+
+static void cmd_rm() {
+    if (argc < 2) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: rm <file>\n");
+        return;
+    }
+    if (fs_delete(args[1]) < 0)
+        vga_printf_colour(LIGHT_RED, BLACK, "File not found: %s\n", args[1]);
+    else
+        vga_printf("Deleted %s\n", args[1]);
+}
+
+static void cmd_touch() {
+    if (argc < 2) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: touch <file>\n");
+        return;
+    }
+    if (fs_create(args[1]) < 0)
+        vga_printf_colour(LIGHT_RED, BLACK, "Could not create file: %s\n", args[1]);
+    else
+        vga_printf("Created %s\n", args[1]);
+}
 
 static void cmd_help() {
     // count total lines
@@ -287,6 +403,13 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "about")    == 0) cmd_about();
     else if (strcmp(args[0], "reboot")   == 0) cmd_reboot();
     else if (strcmp(args[0], "shutdown") == 0) cmd_shutdown();
+    else if (strcmp(args[0], "ls")    == 0)    cmd_ls();
+    else if (strcmp(args[0], "cat")   == 0)    cmd_cat();
+    else if (strcmp(args[0], "write") == 0)    cmd_write();
+    else if (strcmp(args[0], "rm")    == 0)    cmd_rm();
+    else if (strcmp(args[0], "touch") == 0)    cmd_touch();
+    else if (strcmp(args[0], "atatest") == 0)    cmd_atatest();
+    else if (strcmp(args[0], "inotest") == 0)    cmd_inodetest();
     else {
         vga_printf_colour(LIGHT_RED, BLACK, "Unknown command: %s\n", args[0]);
     }
@@ -298,7 +421,7 @@ static void execute(char *cmd) {
 
 void shell_init(multiboot_info_t *mbi) {
     mbi_ptr = mbi;
-    vga_clear();
+    //vga_clear();
     vga_printf_colour(LIGHT_CYAN, BLACK, " ________  _______   ________  ___  ________  ________  ________\n");
     vga_printf_colour(LIGHT_CYAN, BLACK, "|\\   __  \\|\\  ___ \\ |\\   ____\\|\\  \\|\\   ____\\|\\   __  \\|\\   ____\\\n");
     vga_printf_colour(LIGHT_CYAN, BLACK, "\\ \\  \\|\\  \\ \\   __/|\\ \\  \\___|\\ \\  \\ \\  \\___|.\\ \\  \\|\\  \\ \\  \\___|_\n");

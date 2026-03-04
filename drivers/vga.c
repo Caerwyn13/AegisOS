@@ -73,17 +73,15 @@ static void print_hex(uint32_t n) {
 
 static void vga_printf_args(const char *fmt, va_list args) {
     while (*fmt) {
-        if (*fmt != '%') {
-            vga_putchar(*fmt++);
-            continue;
-        }
-
+        if (*fmt != '%') { vga_putchar(*fmt++); continue; }
         fmt++;
 
-        int zero_pad = 0;
-        int width    = 0;
+        int left_align = 0;
+        int zero_pad   = 0;
+        int width      = 0;
 
-        if (*fmt == '0') { zero_pad = 1; fmt++; }
+        if (*fmt == '-') { left_align = 1; fmt++; }
+        if (*fmt == '0') { zero_pad   = 1; fmt++; }
         while (*fmt >= '0' && *fmt <= '9')
             width = width * 10 + (*fmt++ - '0');
 
@@ -103,9 +101,20 @@ static void vga_printf_args(const char *fmt, va_list args) {
             case 'c':
                 vga_putchar((char)va_arg(args, int));
                 break;
-            case 's':
-                vga_print(va_arg(args, const char *));
+            case 's': {
+                const char *s = va_arg(args, const char *);
+                int len = 0;
+                const char *tmp = s;
+                while (*tmp++) len++;
+                if (left_align) {
+                    while (*s) vga_putchar(*s++);
+                    while (len < width) { vga_putchar(' '); len++; }
+                } else {
+                    while (len < width) { vga_putchar(' '); len++; }
+                    while (*s) vga_putchar(*s++);
+                }
                 break;
+            }
             case '%':
                 vga_putchar('%');
                 break;

@@ -4,7 +4,7 @@ CD  := gcc
 LD  := ld
 
 ASMFLAGS := -f elf32
-CIMPS    := -Iinclude -Icpu -Idrivers -Iports -Ikernel/mm -Ikernel/shell -Ikernel/lib
+CIMPS    := -Iinclude -Icpu -Idrivers -Iports -Ikernel/mm -Ikernel/shell -Ikernel/lib -Ikernel/fs
 CFLAGS   := -m32 -ffreestanding -fno-stack-protector -nostdlib -nodefaultlibs -Wall -Wextra ${CIMPS}
 LDFLAGS  := -m elf_i386 -T linker.ld
 
@@ -46,8 +46,19 @@ $(ISO): $(KERNEL)
 	cp boot/grub.cfg iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) iso
 
-run: $(ISO)
-	qemu-system-i386 -cdrom $(ISO) -serial mon:stdio -monitor telnet:localhost:4444,server,nowait
+disk.img:
+	@if [ ! -f disk.img ]; then \
+		dd if=/dev/zero of=disk.img bs=1M count=64; \
+	fi
+
+run: $(ISO) disk.img
+	qemu-system-i386 -cdrom $(ISO) -serial mon:stdio \
+	-monitor telnet:localhost:4444,server,nowait \
+	-drive file=disk.img,format=raw,index=0,media=disk
 
 clean:
 	rm -rf $(OBJ_DIR) iso $(KERNEL) $(ISO)
+
+# separate target to wipe the disk
+clean-disk:
+	rm -f disk.img

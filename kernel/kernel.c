@@ -7,13 +7,15 @@
 #include "serial.h"
 #include "keyboard.h"
 #include "pmm.h"
-#include "heap.h"
 #include "vga.h"
 #include "shell.h"
 #include "multiboot.h"
 #include "pit.h"
 #include "rtc.h"
 #include "paging.h"
+#include "ata.h"
+#include "aegisfs.h"
+#include "heap.h"
 
 void kernel_main(multiboot_info_t* mbi) {
 	print("Starting kernel initialization...\n");
@@ -50,6 +52,12 @@ void kernel_main(multiboot_info_t* mbi) {
 
 	print("Initialising the heap...\n");
 	heap_init();
+
+	print("Initialising the ATA driver...\n");
+	ata_init();
+
+	print("Initisalising the Filesystem...\n");
+    fs_init();
 
 	print("Starting basic kernel shell interface...\n");
 	shell_init(mbi);
