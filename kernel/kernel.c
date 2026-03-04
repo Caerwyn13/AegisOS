@@ -10,6 +10,7 @@
 #include "vga.h"
 #include "shell.h"
 #include "multiboot.h"
+#include "pit.h"
 
 void kernel_main(multiboot_info_t* mbi) {
 	print("Starting kernel initialization...\n");
@@ -28,6 +29,9 @@ void kernel_main(multiboot_info_t* mbi) {
 
 	print("Installing IRQ handlers for hardware interrupts...\n");
 	irq_init();
+
+	print("Initialising the PIT Clock...\n");
+	pit_init(1000);  // 1000hz = 1 tick per ms
 
 	print("Initializing keyboard driver and enabling keyboard input...\n");
 	keyboard_init();

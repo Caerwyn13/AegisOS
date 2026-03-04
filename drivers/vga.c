@@ -2,6 +2,7 @@
 #include "types.h"
 #include "vga.h"
 #include "ports.h"
+#include "stdarg.h"
 
 #define VGA_ADDRESS 0xB8000
 
@@ -118,5 +119,119 @@ void vga_print_int_colour(uint32_t n, vga_colour_t fg, vga_colour_t bg) {
     uint8_t old = colour;
     vga_set_colour(fg, bg);
     vga_print_int(n);
+    colour = old;
+}
+
+void vga_printf(const char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+
+    while (*fmt) {
+        if (*fmt == '%') {
+            fmt++;
+            switch (*fmt) {
+                case 'd': {
+                    int n = va_arg(args, int);
+                    if (n < 0) { vga_putchar('-'); n = -n; }
+                    vga_print_int((uint32_t)n);
+                    break;
+                }
+                case 'u':
+                    vga_print_int(va_arg(args, uint32_t));
+                    break;
+                case 'x': {
+                    uint32_t n = va_arg(args, uint32_t);
+                    char hex[9];
+                    int i = 7;
+                    hex[8] = 0;
+                    while (i >= 0) {
+                        hex[i--] = "0123456789ABCDEF"[n & 0xF];
+                        n >>= 4;
+                    }
+                    // skip leading zeros
+                    char *p = hex;
+                    while (*p == '0' && *(p+1)) p++;
+                    vga_print(p);
+                    break;
+                }
+                case 'c':
+                    vga_putchar((char)va_arg(args, int));
+                    break;
+                case 's':
+                    vga_print(va_arg(args, const char *));
+                    break;
+                case '%':
+                    vga_putchar('%');
+                    break;
+                default:
+                    vga_putchar('%');
+                    vga_putchar(*fmt);
+                    break;
+            }
+        } else {
+            vga_putchar(*fmt);
+        }
+        fmt++;
+    }
+
+    va_end(args);
+}
+
+void vga_printf_colour(vga_colour_t fg, vga_colour_t bg, const char *fmt, ...) {
+    uint8_t old = colour;
+    vga_set_colour(fg, bg);
+
+    va_list args;
+    va_start(args, fmt);
+
+    // reuse vga_printf logic by building a small shim
+    while (*fmt) {
+        if (*fmt == '%') {
+            fmt++;
+            switch (*fmt) {
+                case 'd': {
+                    int n = va_arg(args, int);
+                    if (n < 0) { vga_putchar('-'); n = -n; }
+                    vga_print_int((uint32_t)n);
+                    break;
+                }
+                case 'u':
+                    vga_print_int(va_arg(args, uint32_t));
+                    break;
+                case 'x': {
+                    uint32_t n = va_arg(args, uint32_t);
+                    char hex[9];
+                    int i = 7;
+                    hex[8] = 0;
+                    while (i >= 0) {
+                        hex[i--] = "0123456789ABCDEF"[n & 0xF];
+                        n >>= 4;
+                    }
+                    char *p = hex;
+                    while (*p == '0' && *(p+1)) p++;
+                    vga_print(p);
+                    break;
+                }
+                case 'c':
+                    vga_putchar((char)va_arg(args, int));
+                    break;
+                case 's':
+                    vga_print(va_arg(args, const char *));
+                    break;
+                case '%':
+                    vga_putchar('%');
+                    break;
+                default:
+                    vga_putchar('%');
+                    vga_putchar(*fmt);
+                    break;
+            }
+        } else {
+            vga_putchar(*fmt);
+        }
+        fmt++;
+    }
+
+    va_end(args);
     colour = old;
 }

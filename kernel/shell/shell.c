@@ -56,13 +56,16 @@ static void print_prompt() {
 }
 
 static void cmd_help() {
-    vga_print_colour("Available commands:\n", YELLOW, BLACK);
+    vga_printf_colour(YELLOW, BLACK, "Available commands:\n");
     vga_print("  help                - show this message\n");
     vga_print("  clear               - clear the screen\n");
     vga_print("  clear -c <colour>   - clear with background colour\n");
     vga_print("  echo <text>         - print text\n");
     vga_print("  mem                 - show free memory\n");
     vga_print("  memmap              - show memory map\n");
+    vga_print("  uptime              - show system uptime\n");
+    vga_print("  date                - show system ticks since boot\n");
+    vga_print("  hexdump <addr> [len]- dump memory in hex\n");
     vga_print("  history             - show command history\n");
     vga_print("  about               - about this OS\n");
     vga_print("  reboot              - reboot the system\n");
@@ -114,9 +117,7 @@ static void cmd_history() {
 }
 
 static void cmd_mem() {
-    vga_print("Free memory: ");
-    vga_print_int(pmm_free_pages() * 4);
-    vga_print(" KB\n");
+    vga_printf("Free memory: %u KB\n", pmm_free_pages() * 4);
 }
 
 static void cmd_about() {
@@ -179,6 +180,75 @@ static void cmd_memmap() {
     }
 }
 
+static void cmd_uptime() {
+    uint32_t seconds = pit_ticks() / 1000;
+    uint32_t minutes = seconds / 60;
+    uint32_t hours   = minutes / 60;
+    seconds %= 60;
+    minutes %= 60;
+
+    vga_print("Uptime: ");
+    vga_print_int(hours);
+    vga_print("h ");
+    vga_print_int(minutes);
+    vga_print("m ");
+    vga_print_int(seconds);
+    vga_print("s\n");
+}
+
+static void cmd_date() {
+    vga_print("System ticks: ");
+    vga_print_int(pit_ticks());
+    vga_print(" ms since boot\n");
+}
+
+static void cmd_hexdump() {
+    if (argc < 2) {
+        vga_print_colour("Usage: hexdump <address> [length]\n", LIGHT_RED, BLACK);
+        return;
+    }
+
+    // parse hex address
+    uint32_t addr = 0;
+    char *p = args[1];
+    if (p[0] == '0' && p[1] == 'x') p += 2;
+    while (*p) {
+        addr <<= 4;
+        if (*p >= '0' && *p <= '9')      addr |= *p - '0';
+        else if (*p >= 'a' && *p <= 'f') addr |= *p - 'a' + 10;
+        else if (*p >= 'A' && *p <= 'F') addr |= *p - 'A' + 10;
+        p++;
+    }
+
+    uint32_t len = 64; // default 64 bytes
+    if (argc >= 3) {
+        len = 0;
+        p = args[2];
+        while (*p) {
+            len = len * 10 + (*p++ - '0');
+        }
+    }
+
+    uint8_t *mem = (uint8_t *)addr;
+    uint32_t i;
+    for (i = 0; i < len; i++) {
+        if (i % 16 == 0) {
+            vga_print_colour("0x", DARK_GREY, BLACK);
+            vga_print_int(addr + i);
+            vga_print("  ");
+        }
+        // print hex byte
+        char hex[3];
+        hex[0] = "0123456789ABCDEF"[mem[i] >> 4];
+        hex[1] = "0123456789ABCDEF"[mem[i] & 0xF];
+        hex[2] = 0;
+        vga_print_colour(hex, LIGHT_GREEN, BLACK);
+        vga_putchar(' ');
+        if (i % 16 == 15) vga_putchar('\n');
+    }
+    if (len % 16 != 0) vga_putchar('\n');
+}
+
 static void execute(char *cmd) {
     parse_args(cmd);
     if (argc == 0) return;
@@ -192,6 +262,9 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "reboot")   == 0) cmd_reboot();
     else if (strcmp(args[0], "memmap")   == 0) cmd_memmap();
     else if (strcmp(args[0], "history")  == 0) cmd_history();
+    else if (strcmp(args[0], "uptime")   == 0) cmd_uptime();
+    else if (strcmp(args[0], "date")     == 0) cmd_date();
+    else if (strcmp(args[0], "hexdump")  == 0) cmd_hexdump();
     else {
         vga_print_colour("Unknown command: ", LIGHT_RED, BLACK);
         vga_print(args[0]);

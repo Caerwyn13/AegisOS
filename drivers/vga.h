@@ -2,6 +2,7 @@
 #define VGA_H
 
 #include "types.h"
+#include "stdarg.h"
 
 #define VGA_WIDTH  80
 #define VGA_HEIGHT 25
@@ -28,10 +29,8 @@ typedef enum {
 void vga_init();
 void vga_clear();
 void vga_putchar(char c);
-void vga_print(const char* str);
-void vga_print_colour(const char* str, vga_colour_t fg, vga_colour_t bg);
-void vga_print_int(uint32_t n);
-void vga_print_int_colour(uint32_t n, vga_colour_t fg, vga_colour_t bg);
+void vga_printf(const char *fmt, ...);
+void vga_printf_colour(vga_colour_t fg, vga_colour_t bg, const char *fmt, ...);
 void vga_set_colour(vga_colour_t fg, vga_colour_t bg);
 void vga_update_cursor();
 
