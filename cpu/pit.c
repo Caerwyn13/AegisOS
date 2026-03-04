@@ -1,6 +1,6 @@
 #include "pit.h"
 #include "irq.h"
-#include "serial.h"
+#include "ports.h"
 
 #define PIT_CHANNEL0  0x40
 #define PIT_COMMAND   0x43
