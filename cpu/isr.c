@@ -1,5 +1,6 @@
 #include "isr.h"
 #include "serial.h"
+#include "vga.h"
 
 static const char *exceptions[] = {
 	"Division By Zero",
@@ -28,6 +29,13 @@ static const char *exceptions[] = {
 };
 
 void isr_handler(registers_t* regs) {
+	if (regs->int_no == 14) {
+		uint32_t fault_addr;
+		__asm__ volatile ("mov %%cr2, %0" : "=r"(fault_addr));
+		vga_printf_colour(LIGHT_RED, BLACK, "PAGE FAULT at 0x%x\n", fault_addr);
+		vga_printf("err: %u\n", regs->err_code);
+		for(;;);
+	}
 	print("EXCEPTION: ");
 	print(exceptions[regs->int_no]);
 	print("\n");

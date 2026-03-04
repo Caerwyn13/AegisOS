@@ -11,6 +11,7 @@
 #include "shell.h"
 #include "multiboot.h"
 #include "pit.h"
+#include "paging.h"
 
 void kernel_main(multiboot_info_t* mbi) {
 	print("Starting kernel initialization...\n");
@@ -38,6 +39,9 @@ void kernel_main(multiboot_info_t* mbi) {
 
 	print("Initializing Physical Memory Manager (PMM) using multiboot information...\n");
 	pmm_init(mbi);
+
+	print("Enabling the use of Paging...");
+	paging_init();
 
 	print("Starting basic kernel shell interface...\n");
 	shell_init(mbi);
