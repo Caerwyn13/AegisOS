@@ -7,6 +7,7 @@
 #include "serial.h"
 #include "keyboard.h"
 #include "pmm.h"
+#include "heap.h"
 #include "vga.h"
 #include "shell.h"
 #include "multiboot.h"
@@ -40,8 +41,11 @@ void kernel_main(multiboot_info_t* mbi) {
 	print("Initializing Physical Memory Manager (PMM) using multiboot information...\n");
 	pmm_init(mbi);
 
-	print("Enabling the use of Paging...");
+	print("Enabling the use of Paging...\n");
 	paging_init();
+
+	print("Initialising the heap...\n");
+	heap_init();
 
 	print("Starting basic kernel shell interface...\n");
 	shell_init(mbi);

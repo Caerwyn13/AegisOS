@@ -2,6 +2,7 @@
 #include "vga.h"
 #include "string.h"
 #include "pmm.h"
+#include "heap.h"
 #include "pit.h"
 #include "ports.h"
 #include "multiboot.h"
@@ -34,6 +35,7 @@ static const char *help_lines[] = {
     "  echo <text>            - print text",
     "  mem                    - show free memory",
     "  memmap                 - show memory map",
+    "  heap                   - shows the heap",
     "  uptime                 - show system uptime",
     "  date                   - show ms since boot",
     "  hexdump <addr> [len]   - dump memory in hex",
@@ -196,6 +198,10 @@ static void cmd_memmap() {
     }
 }
 
+static void cmd_heap() {
+    heap_stats();
+}
+
 static void cmd_uptime() {
     uint32_t seconds = pit_ticks() / 1000;
     uint32_t minutes = seconds / 60;
@@ -269,6 +275,7 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "echo")     == 0) cmd_echo();
     else if (strcmp(args[0], "mem")      == 0) cmd_mem();
     else if (strcmp(args[0], "memmap")   == 0) cmd_memmap();
+    else if (strcmp(args[0], "heap")     == 0) cmd_heap();
     else if (strcmp(args[0], "uptime")   == 0) cmd_uptime();
     else if (strcmp(args[0], "date")     == 0) cmd_date();
     else if (strcmp(args[0], "hexdump")  == 0) cmd_hexdump();
