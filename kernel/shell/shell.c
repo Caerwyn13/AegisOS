@@ -6,6 +6,7 @@
 #include "pit.h"
 #include "ports.h"
 #include "multiboot.h"
+#include "rtc.h"
 
 #define BUFFER_SIZE  256
 #define HISTORY_SIZE 10
@@ -37,7 +38,7 @@ static const char *help_lines[] = {
     "  memmap                 - show memory map",
     "  heap                   - shows the heap",
     "  uptime                 - show system uptime",
-    "  date                   - show ms since boot",
+    "  date                   - show the current date and time",
     "  hexdump <addr> [len]   - dump memory in hex",
     "  history                - show command history",
     "  about                  - about AegisOS",
@@ -212,7 +213,10 @@ static void cmd_uptime() {
 }
 
 static void cmd_date() {
-    vga_printf("System ticks: %u ms since boot\n", pit_ticks());
+    rtc_time_t t = rtc_get_time();
+    vga_printf("%02u/%02u/%u %02u:%02u:%02u\n",
+        t.day, t.month, t.year,
+        t.hour, t.minute, t.second);
 }
 
 static void cmd_hexdump() {

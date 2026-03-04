@@ -12,6 +12,7 @@
 #include "shell.h"
 #include "multiboot.h"
 #include "pit.h"
+#include "rtc.h"
 #include "paging.h"
 
 void kernel_main(multiboot_info_t* mbi) {
@@ -34,6 +35,9 @@ void kernel_main(multiboot_info_t* mbi) {
 
 	print("Initialising the PIT Clock...\n");
 	pit_init(1000);  // 1000hz = 1 tick per ms
+
+	print("Initialisint the RTC...\n");
+	rtc_init();
 
 	print("Initializing keyboard driver and enabling keyboard input...\n");
 	keyboard_init();

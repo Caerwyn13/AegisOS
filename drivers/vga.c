@@ -1,23 +1,22 @@
-// Main display drivers
-#include "types.h"
 #include "vga.h"
 #include "ports.h"
 #include "stdarg.h"
+#include "types.h"
+
+// ============================================================
+// State
+// ============================================================
 
 #define VGA_ADDRESS 0xB8000
 
-static uint16_t* vga  = (uint16_t*)VGA_ADDRESS;
-static int cursor_x   = 0;
-static int cursor_y   = 0;
-static uint8_t colour = 0;
+static uint16_t *vga  = (uint16_t *)VGA_ADDRESS;
+static int       cursor_x = 0;
+static int       cursor_y = 0;
+static uint8_t   colour   = 0;
 
-void vga_update_cursor() {
-    uint16_t pos = cursor_y * VGA_WIDTH + cursor_x;
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, (uint8_t)(pos & 0xFF));
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
-}
+// ============================================================
+// Internal helpers
+// ============================================================
 
 static uint16_t make_entry(char c, uint8_t col) {
     return (uint16_t)c | ((uint16_t)col << 8);
@@ -35,8 +34,100 @@ static void scroll() {
         for (i = (VGA_HEIGHT - 1) * VGA_WIDTH; i < VGA_HEIGHT * VGA_WIDTH; i++)
             vga[i] = make_entry(' ', colour);
         cursor_y = VGA_HEIGHT - 1;
-        vga_update_cursor();
     }
+}
+
+static void print_uint(uint32_t n, int width, int zero_pad) {
+    char tmp[16];
+    int  i = 0;
+
+    if (n == 0) {
+        tmp[i++] = '0';
+    } else {
+        while (n > 0) {
+            tmp[i++] = '0' + (n % 10);
+            n /= 10;
+        }
+    }
+
+    while (i < width)
+        tmp[i++] = zero_pad ? '0' : ' ';
+
+    int j;
+    for (j = i - 1; j >= 0; j--)
+        vga_putchar(tmp[j]);
+}
+
+static void print_hex(uint32_t n) {
+    char hex[9];
+    int  i = 7;
+    hex[8] = 0;
+    while (i >= 0) {
+        hex[i--] = "0123456789ABCDEF"[n & 0xF];
+        n >>= 4;
+    }
+    char *p = hex;
+    while (*p == '0' && *(p + 1)) p++;
+    while (*p) vga_putchar(*p++);
+}
+
+static void vga_printf_args(const char *fmt, va_list args) {
+    while (*fmt) {
+        if (*fmt != '%') {
+            vga_putchar(*fmt++);
+            continue;
+        }
+
+        fmt++;
+
+        int zero_pad = 0;
+        int width    = 0;
+
+        if (*fmt == '0') { zero_pad = 1; fmt++; }
+        while (*fmt >= '0' && *fmt <= '9')
+            width = width * 10 + (*fmt++ - '0');
+
+        switch (*fmt) {
+            case 'd': {
+                int n = va_arg(args, int);
+                if (n < 0) { vga_putchar('-'); n = -n; }
+                print_uint((uint32_t)n, width, zero_pad);
+                break;
+            }
+            case 'u':
+                print_uint(va_arg(args, uint32_t), width, zero_pad);
+                break;
+            case 'x':
+                print_hex(va_arg(args, uint32_t));
+                break;
+            case 'c':
+                vga_putchar((char)va_arg(args, int));
+                break;
+            case 's':
+                vga_print(va_arg(args, const char *));
+                break;
+            case '%':
+                vga_putchar('%');
+                break;
+            default:
+                vga_putchar('%');
+                vga_putchar(*fmt);
+                break;
+        }
+        fmt++;
+    }
+}
+
+// ============================================================
+// Public API
+// ============================================================
+
+void vga_update_cursor() {
+    uint16_t pos = cursor_y * VGA_WIDTH + cursor_x;
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (uint8_t)(pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
 }
 
 void vga_init() {
@@ -57,6 +148,10 @@ void vga_set_colour(vga_colour_t fg, vga_colour_t bg) {
     colour = make_colour(fg, bg);
 }
 
+int vga_get_row() {
+    return cursor_y;
+}
+
 void vga_putchar(char c) {
     if (c == '\n') {
         cursor_x = 0;
@@ -72,8 +167,7 @@ void vga_putchar(char c) {
         cursor_x = (cursor_x + 8) & ~7;
     } else {
         vga[cursor_y * VGA_WIDTH + cursor_x] = make_entry(c, colour);
-        cursor_x++;
-        if (cursor_x >= VGA_WIDTH) {
+        if (++cursor_x >= VGA_WIDTH) {
             cursor_x = 0;
             cursor_y++;
         }
@@ -82,162 +176,24 @@ void vga_putchar(char c) {
     vga_update_cursor();
 }
 
-void vga_print(const char* str) {
-    while (*str) {
+void vga_print(const char *str) {
+    while (*str)
         vga_putchar(*str++);
-    }
-}
-
-void vga_print_colour(const char* str, vga_colour_t fg, vga_colour_t bg) {
-    uint8_t old = colour;
-    colour = make_colour(fg, bg);
-    vga_print(str);
-    colour = old;
-}
-
-void vga_print_int(uint32_t n) {
-    char buf[16];
-    int i = 0;
-    if (n == 0) {
-        vga_print("0");
-        return;
-    }
-    while (n > 0) {
-        buf[i++] = '0' + (n % 10);
-        n /= 10;
-    }
-    // reverse
-    int start = 0, end = i - 1;
-    while (start < end) {
-        char t = buf[start];
-        buf[start++] = buf[end];
-        buf[end--] = t;
-    }
-    buf[i] = 0;
-    vga_print(buf);
-}
-
-void vga_print_int_colour(uint32_t n, vga_colour_t fg, vga_colour_t bg) {
-    uint8_t old = colour;
-    vga_set_colour(fg, bg);
-    vga_print_int(n);
-    colour = old;
 }
 
 void vga_printf(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-
-    while (*fmt) {
-        if (*fmt == '%') {
-            fmt++;
-            switch (*fmt) {
-                case 'd': {
-                    int n = va_arg(args, int);
-                    if (n < 0) { vga_putchar('-'); n = -n; }
-                    vga_print_int((uint32_t)n);
-                    break;
-                }
-                case 'u':
-                    vga_print_int(va_arg(args, uint32_t));
-                    break;
-                case 'x': {
-                    uint32_t n = va_arg(args, uint32_t);
-                    char hex[9];
-                    int i = 7;
-                    hex[8] = 0;
-                    while (i >= 0) {
-                        hex[i--] = "0123456789ABCDEF"[n & 0xF];
-                        n >>= 4;
-                    }
-                    // skip leading zeros
-                    char *p = hex;
-                    while (*p == '0' && *(p+1)) p++;
-                    vga_print(p);
-                    break;
-                }
-                case 'c':
-                    vga_putchar((char)va_arg(args, int));
-                    break;
-                case 's':
-                    vga_print(va_arg(args, const char *));
-                    break;
-                case '%':
-                    vga_putchar('%');
-                    break;
-                default:
-                    vga_putchar('%');
-                    vga_putchar(*fmt);
-                    break;
-            }
-        } else {
-            vga_putchar(*fmt);
-        }
-        fmt++;
-    }
-
+    vga_printf_args(fmt, args);
     va_end(args);
 }
 
 void vga_printf_colour(vga_colour_t fg, vga_colour_t bg, const char *fmt, ...) {
     uint8_t old = colour;
     vga_set_colour(fg, bg);
-
     va_list args;
     va_start(args, fmt);
-
-    // reuse vga_printf logic by building a small shim
-    while (*fmt) {
-        if (*fmt == '%') {
-            fmt++;
-            switch (*fmt) {
-                case 'd': {
-                    int n = va_arg(args, int);
-                    if (n < 0) { vga_putchar('-'); n = -n; }
-                    vga_print_int((uint32_t)n);
-                    break;
-                }
-                case 'u':
-                    vga_print_int(va_arg(args, uint32_t));
-                    break;
-                case 'x': {
-                    uint32_t n = va_arg(args, uint32_t);
-                    char hex[9];
-                    int i = 7;
-                    hex[8] = 0;
-                    while (i >= 0) {
-                        hex[i--] = "0123456789ABCDEF"[n & 0xF];
-                        n >>= 4;
-                    }
-                    char *p = hex;
-                    while (*p == '0' && *(p+1)) p++;
-                    vga_print(p);
-                    break;
-                }
-                case 'c':
-                    vga_putchar((char)va_arg(args, int));
-                    break;
-                case 's':
-                    vga_print(va_arg(args, const char *));
-                    break;
-                case '%':
-                    vga_putchar('%');
-                    break;
-                default:
-                    vga_putchar('%');
-                    vga_putchar(*fmt);
-                    break;
-            }
-        } else {
-            vga_putchar(*fmt);
-        }
-        fmt++;
-    }
-
+    vga_printf_args(fmt, args);
     va_end(args);
     colour = old;
-}
-
-int vga_get_row() {
-    return cursor_y;
 }
