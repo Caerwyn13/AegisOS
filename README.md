@@ -15,19 +15,35 @@ A simple x86 operating system written in C and NASM assembly.
 - PS/2 Keyboard driver with UK layout, shift, caps lock and arrow keys
 - VGA text mode driver with colour support
 - Physical Memory Manager (PMM) using a bitmap allocator
-- Interactive shell with command history
+- Paging and virtual memory
+- Heap allocator (`kmalloc`/`kfree`)
+- PIT timer with uptime tracking
+- RTC driver for real date and time
+- ATA disk driver for persistent storage
+- AegisFS — a custom filesystem with persistent file storage
+- Interactive shell with command history and pagination
 
 ## Shell Commands
 
 | Command | Description |
 |---|---|
 | `help` | Show available commands |
+| `help -p <page>` | Show a specific page of help |
 | `clear` | Clear the screen |
 | `clear -c <colour>` | Clear with a background colour |
 | `echo <text>` | Print text to the screen |
 | `mem` | Show free memory in KB |
 | `memmap` | Show the GRUB memory map |
+| `uptime` | Show system uptime |
+| `date` | Show current date and time |
+| `hexdump <addr> [len]` | Dump memory in hex |
 | `history` | Show command history |
+| `heap` | Show heap statistics |
+| `ls` | List files on disk |
+| `cat <file>` | Read a file |
+| `write <file> <content>` | Write to a file |
+| `touch <file>` | Create an empty file |
+| `rm <file>` | Delete a file |
 | `about` | About AegisOS |
 | `reboot` | Reboot the system |
 | `shutdown` | Shutdown the system |
@@ -50,19 +66,27 @@ AegisOS/
 │   │   ├── isr.c / isr.h
 │   │   ├── isr.asm
 │   │   ├── irq.c / irq.h
-│   │   └── pic.c / pic.h
+│   │   ├── pic.c / pic.h
+│   │   └── pit.c / pit.h
 │   ├── drivers/
 │   │   ├── vga.c / vga.h
 │   │   ├── keyboard.c / keyboard.h
-│   │   └── serial.c / serial.h
+│   │   ├── serial.c / serial.h
+│   │   ├── ata.c / ata.h
+│   │   └── rtc.c / rtc.h
 │   ├── mm/
-│   │   └── pmm.c / pmm.h
+│   │   ├── pmm.c / pmm.h
+│   │   ├── paging.c / paging.h
+│   │   └── heap.c / heap.h
+│   ├── fs/
+│   │   └── aegisfs.c / aegisfs.h
 │   ├── lib/
 │   │   └── string.c / string.h
 │   └── shell/
 │       └── shell.c / shell.h
 ├── include/
 │   ├── types.h
+│   ├── stdarg.h
 │   └── multiboot.h
 ├── linker.ld
 └── Makefile
@@ -149,7 +173,6 @@ Replace `/dev/sdX` with your USB drive (be careful to choose the correct drive).
 
 **On Windows:**
 Use [Rufus](https://rufus.ie) to write the ISO to a USB drive in DD mode.
-
 ## License
 
 MIT
