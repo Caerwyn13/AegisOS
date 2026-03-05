@@ -16,6 +16,7 @@
 #include "ata.h"
 #include "aegisfs.h"
 #include "heap.h"
+#include "syscall.h"
 
 void kernel_main(multiboot_info_t* mbi) {
 	print("Starting kernel initialization...\n");
@@ -53,17 +54,22 @@ void kernel_main(multiboot_info_t* mbi) {
 	print("Initialising the heap...\n");
 	heap_init();
 
+	print("Enabling CPU interrupts (STI instruction)...\n");
+	__asm__ volatile ("sti");
+
+	pit_sleep(100);
 	print("Initialising the ATA driver...\n");
 	ata_init();
 
+	pit_sleep(100);
 	print("Initisalising the Filesystem...\n");
     fs_init();
 
+	print("Initialising syscalls...\n");
+	syscall_init();
+
 	print("Starting basic kernel shell interface...\n");
 	shell_init(mbi);
-
-	print("Enabling CPU interrupts (STI instruction)...\n");
-	__asm__ volatile ("sti");
 
 	print("Kernel initialization complete. System is now operational.\n");
 

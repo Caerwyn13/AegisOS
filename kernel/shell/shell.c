@@ -129,10 +129,10 @@ static uint32_t parse_int(const char *str) {
 }
 
 // ============================================================
-// Commands
+// DEBUG Commands
 // ============================================================
 
-static void cmd_inodetest() {
+static void _cmd_inodetest() {
     fs_inode_t inode;
     memset(&inode, 0, sizeof(inode));
     strcpy(inode.name, "test.txt");
@@ -160,7 +160,7 @@ static void cmd_inodetest() {
     vga_printf("sizeof: %u\n", sizeof(fs_inode_t));
 }
 
-static void cmd_atatest() {
+static void _cmd_atatest() {
     uint8_t buf[512];
     // write a known pattern
     int i;
@@ -177,6 +177,20 @@ static void cmd_atatest() {
         vga_printf("%x ", buf2[i]);
     vga_printf("\n");
 }
+
+static void _cmd_syscalltest() {
+    __asm__ volatile (
+        "mov %0, %%ebx\n"      // SYS_PRINT
+        "mov $1, %%eax\n"     // String pointer
+        "int $0x80\n"
+        : : "r"("Syscalls work!\n")
+        : "eax", "ebx"
+    );
+}
+
+// ============================================================
+// Commands
+// ============================================================
 
 static void cmd_ls() {
     fs_list();
@@ -403,13 +417,15 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "about")    == 0) cmd_about();
     else if (strcmp(args[0], "reboot")   == 0) cmd_reboot();
     else if (strcmp(args[0], "shutdown") == 0) cmd_shutdown();
-    else if (strcmp(args[0], "ls")    == 0)    cmd_ls();
-    else if (strcmp(args[0], "cat")   == 0)    cmd_cat();
-    else if (strcmp(args[0], "write") == 0)    cmd_write();
-    else if (strcmp(args[0], "rm")    == 0)    cmd_rm();
-    else if (strcmp(args[0], "touch") == 0)    cmd_touch();
-    else if (strcmp(args[0], "atatest") == 0)    cmd_atatest();
-    else if (strcmp(args[0], "inotest") == 0)    cmd_inodetest();
+    else if (strcmp(args[0], "ls")       == 0) cmd_ls();
+    else if (strcmp(args[0], "cat")      == 0) cmd_cat();
+    else if (strcmp(args[0], "write")    == 0) cmd_write();
+    else if (strcmp(args[0], "rm")       == 0) cmd_rm();
+    else if (strcmp(args[0], "touch")    == 0) cmd_touch();
+
+    else if (strcmp(args[0], "atatest")     == 0) _cmd_atatest();
+    else if (strcmp(args[0], "inodetest")   == 0) _cmd_inodetest();
+    else if (strcmp(args[0], "syscalltest") == 0) _cmd_syscalltest();
     else {
         vga_printf_colour(LIGHT_RED, BLACK, "Unknown command: %s\n", args[0]);
     }
