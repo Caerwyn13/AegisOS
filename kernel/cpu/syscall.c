@@ -12,8 +12,6 @@
 
 static void sys_exit(int code) {
     vga_printf("Process exited with code %d\n", code);
-    // for now just hang, later we'll return to scheduler
-    for(;;);
 }
 
 static void sys_print(const char *str) {

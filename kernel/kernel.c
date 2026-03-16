@@ -21,7 +21,7 @@
 void kernel_main(multiboot_info_t* mbi) {
 	print("Starting kernel initialization...\n");
 
-	print("Initializing serial interface for debugging output...\n");
+	print("Initializing backup serial interface...\n");
 	serial_init();
 
 	print("Setting up Global Descriptor Table (GDT) for memory segmentation...\n");
@@ -57,16 +57,19 @@ void kernel_main(multiboot_info_t* mbi) {
 	print("Enabling CPU interrupts (STI instruction)...\n");
 	__asm__ volatile ("sti");
 
-	pit_sleep(100);
+	pit_sleep(100); // Hardware settling
 	print("Initialising the ATA driver...\n");
 	ata_init();
 
-	pit_sleep(100);
+	pit_sleep(100); // Hardware settling
 	print("Initisalising the Filesystem...\n");
     fs_init();
 
 	print("Initialising syscalls...\n");
 	syscall_init();
+
+	print("Initialising VGA display...\n");
+	vga_init();
 
 	print("Starting basic kernel shell interface...\n");
 	shell_init(mbi);

@@ -9,6 +9,7 @@
 #include "rtc.h"
 #include "aegisfs.h"
 #include "ata.h"
+#include "elf.h"
 
 #define BUFFER_SIZE  256
 #define HISTORY_SIZE 10
@@ -46,6 +47,7 @@ static const char *help_lines[] = {
     "  ls                     - list files",
     "  cat <file>             - read a file",
     "  write <file> <content> - write to a file",
+    "  exec <file>            - execute an ELF binary",
     "  rm <file>              - delete a file",
     "  touch <file>           - create empty file",
     "  about                  - about AegisOS",
@@ -231,6 +233,27 @@ static void cmd_write() {
         vga_printf_colour(LIGHT_RED, BLACK, "Failed to write file\n");
     else
         vga_printf("Written %u bytes to %s\n", strlen(buf), args[1]);
+}
+
+static void cmd_exec() {
+    if (argc < 2) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: exec <file>\n");
+        return;
+    }
+
+    uint32_t entry = 0;
+    if (elf_load(args[1], &entry) < 0) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Failed to load %s\n", args[1]);
+        return;
+    }
+
+    vga_printf("Jumping to 0x%x\n", entry);
+
+    // call the entry point
+    void (*program)() = (void (*)())entry;
+    program();
+
+    vga_printf("Program returned\n");
 }
 
 static void cmd_rm() {
@@ -422,6 +445,7 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "write")    == 0) cmd_write();
     else if (strcmp(args[0], "rm")       == 0) cmd_rm();
     else if (strcmp(args[0], "touch")    == 0) cmd_touch();
+    else if (strcmp(args[0], "exec")     == 0) cmd_exec();
 
     else if (strcmp(args[0], "atatest")     == 0) _cmd_atatest();
     else if (strcmp(args[0], "inodetest")   == 0) _cmd_inodetest();
@@ -438,14 +462,12 @@ static void execute(char *cmd) {
 void shell_init(multiboot_info_t *mbi) {
     mbi_ptr = mbi;
     //vga_clear();
-    vga_printf_colour(LIGHT_CYAN, BLACK, " ________  _______   ________  ___  ________  ________  ________\n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, "|\\   __  \\|\\  ___ \\ |\\   ____\\|\\  \\|\\   ____\\|\\   __  \\|\\   ____\\\n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, "\\ \\  \\|\\  \\ \\   __/|\\ \\  \\___|\\ \\  \\ \\  \\___|.\\ \\  \\|\\  \\ \\  \\___|_\n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, " \\ \\   __  \\ \\  \\_|/_\\ \\  \\  __\\ \\  \\ \\_____  \\ \\  \\\\\\  \\ \\_____  \\\n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, "  \\ \\  \\ \\  \\ \\  \\_|\\ \\ \\  \\|\\  \\ \\  \\|____|\\  \\ \\  \\\\\\  \\|____|\\  \\\n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, "   \\ \\__\\ \\__\\ \\_______\\ \\_______\\ \\__\\____\\_\\  \\ \\_______\\____\\_\\  \\\n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, "    \\|__|\\|__|\\|_______||\\|_______||\\|__|\\_________\\|_______|\\|_________\\\n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, "                                         \\|_________|        \\|_________|/\n");
+    //TODO: FIX DISPLAY
+    vga_printf_colour(LIGHT_CYAN, BLACK, "   _            _     ___  ___  \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "  /_\  ___ __ _(_)___/ _ \/ __| \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, " / _ \/ -_) _` | (_-< (_) \__ \ \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "/_/ \_\___\__, |_/__/\___/|___/ \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "          |___/                 \n");      
     vga_printf("\n");
     vga_printf_colour(YELLOW,     BLACK, "  Welcome to AegisOS!\n");
     vga_printf_colour(LIGHT_GREY, BLACK, "  Type 'help' for a list of commands.\n\n");
