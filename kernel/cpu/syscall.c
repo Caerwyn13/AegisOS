@@ -11,6 +11,7 @@
 // ebx = arg1, ecx = arg2, edx = arg3
 
 static void sys_exit(int code) {
+    // Is this necessary?
     vga_printf("Process exited with code %d\n", code);
 }
 

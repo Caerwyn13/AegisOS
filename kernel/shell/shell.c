@@ -247,13 +247,13 @@ static void cmd_exec() {
         return;
     }
 
-    vga_printf("Jumping to 0x%x\n", entry);
+    //vga_printf("Jumping to 0x%x\n", entry);
 
     // call the entry point
     void (*program)() = (void (*)())entry;
     program();
 
-    vga_printf("Program returned\n");
+    //vga_printf("Program returned\n");
 }
 
 static void cmd_rm() {
@@ -407,6 +407,8 @@ static void cmd_about() {
 }
 
 static void cmd_shutdown() {
+    //TODO: Fix this to work on real hardware
+    // At the moment it only works for QEMU, not VMs or actual hardware
     outw(0x604, 0x2000);
 }
 
