@@ -21,6 +21,8 @@ A simple x86 operating system written in C and NASM assembly.
 - RTC driver for real date and time
 - ATA disk driver for persistent storage
 - AegisFS — a custom filesystem with persistent file storage
+- ELF binary loader — load and execute ELF programs from disk
+- Syscall interface (`int 0x80`) for userspace programs
 - Interactive shell with command history and pagination
 
 ## Shell Commands
@@ -44,11 +46,73 @@ A simple x86 operating system written in C and NASM assembly.
 | `write <file> <content>` | Write to a file |
 | `touch <file>` | Create an empty file |
 | `rm <file>` | Delete a file |
+| `exec <file>` | Execute an ELF binary |
 | `about` | About AegisOS |
 | `reboot` | Reboot the system |
 | `shutdown` | Shutdown the system |
 
 Available colours for `clear -c`: `black`, `blue`, `green`, `cyan`, `red`, `magenta`, `brown`, `grey`, `darkgrey`, `lightblue`, `lightgreen`, `lightcyan`, `lightred`, `lightmagenta`, `yellow`, `white`
+
+## Syscall Interface
+
+Userspace programs communicate with the kernel via `int 0x80`. Set `eax` to the syscall number and arguments in `ebx`, `ecx`, `edx`.
+
+| Number | Name | Arguments | Description |
+|---|---|---|---|
+| 0 | `SYS_EXIT` | `ebx` = exit code | Exit the program |
+| 1 | `SYS_PRINT` | `ebx` = string pointer | Print a string |
+| 2 | `SYS_READ` | `ebx` = name, `ecx` = buf, `edx` = size ptr | Read a file |
+| 3 | `SYS_WRITE` | `ebx` = name, `ecx` = buf, `edx` = size | Write a file |
+| 4 | `SYS_OPEN` | `ebx` = name | Open/create a file |
+| 5 | `SYS_CLOSE` | — | Close a file |
+| 6 | `SYS_GETTIME` | `ebx` = rtc_time_t pointer | Get current time |
+
+### Writing Userspace Programs
+
+Programs must be compiled as static 32-bit ELF executables with no standard library:
+
+```c
+void _start() {
+    const char *msg = "Hello from userspace!\n";
+
+    // SYS_PRINT
+    __asm__ volatile (
+        "mov %0, %%ebx\n"
+        "mov $1, %%eax\n"
+        "int $0x80\n"
+        : : "r"(msg) : "eax", "ebx"
+    );
+
+    // SYS_EXIT
+    __asm__ volatile (
+        "mov $0, %%ebx\n"
+        "mov $0, %%eax\n"
+        "int $0x80\n"
+        : : : "eax", "ebx"
+    );
+}
+```
+
+Compile with:
+```bash
+gcc -m32 -ffreestanding -nostdlib -nodefaultlibs \
+    -static -no-pie -fno-pic \
+    -c hello.c -o hello.o
+
+ld -m elf_i386 -nostdlib --no-dynamic-linker \
+    -Ttext=0x400000 hello.o -o hello.elf
+```
+
+Write to disk using the included `diskwrite` tool:
+```bash
+gcc -o tools/diskwrite tools/diskwrite.c
+./tools/diskwrite disk.img hello.elf
+```
+
+Then run in AegisOS:
+```
+exec hello.elf
+```
 
 ## Project Structure
 
@@ -67,7 +131,8 @@ AegisOS/
 │   │   ├── isr.asm
 │   │   ├── irq.c / irq.h
 │   │   ├── pic.c / pic.h
-│   │   └── pit.c / pit.h
+│   │   ├── pit.c / pit.h
+│   │   └── syscall.c / syscall.h
 │   ├── drivers/
 │   │   ├── vga.c / vga.h
 │   │   ├── keyboard.c / keyboard.h
@@ -79,7 +144,8 @@ AegisOS/
 │   │   ├── paging.c / paging.h
 │   │   └── heap.c / heap.h
 │   ├── fs/
-│   │   └── aegisfs.c / aegisfs.h
+│   │   ├── aegisfs.c / aegisfs.h
+│   │   └── elf.c / elf.h
 │   ├── lib/
 │   │   └── string.c / string.h
 │   └── shell/
@@ -88,6 +154,8 @@ AegisOS/
 │   ├── types.h
 │   ├── stdarg.h
 │   └── multiboot.h
+├── tools/
+│   └── diskwrite.c
 ├── linker.ld
 └── Makefile
 ```
@@ -173,6 +241,14 @@ Replace `/dev/sdX` with your USB drive (be careful to choose the correct drive).
 
 **On Windows:**
 Use [Rufus](https://rufus.ie) to write the ISO to a USB drive in DD mode.
+
+## Roadmap
+
+- [ ] User mode (ring 3)
+- [ ] Multitasking / process scheduler
+- [ ] Expand AegisFS (directories, append, file permissions)
+- [ ] Network driver
+
 ## License
 
 MIT
