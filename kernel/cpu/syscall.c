@@ -5,14 +5,17 @@
 #include "rtc.h"
 #include "aegisfs.h"
 #include "string.h"
+#include "usermode.h"
 
 // syscall handler - called from isr_common when int 0x80 fires
 // eax = syscall number
 // ebx = arg1, ecx = arg2, edx = arg3
 
+int process_exited = 0;
+
 static void sys_exit(int code) {
-    // Is this necessary?
     vga_printf("Process exited with code %d\n", code);
+    process_exited = 1;
 }
 
 static void sys_print(const char *str) {
@@ -70,6 +73,6 @@ void syscall_handler(registers_t *regs) {
 }
 
 void syscall_init() {
-    idt_set_entry(0x80, (uint32_t)isr128, 0x08, 0x8E);
+    idt_set_entry(0x80, (uint32_t)isr128, 0x08, 0xEE);
     vga_printf("Syscalls initialised\n");
 }

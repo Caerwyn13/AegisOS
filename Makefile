@@ -54,7 +54,8 @@ disk.img:
 run: $(ISO) disk.img
 	qemu-system-i386 -cdrom $(ISO) -serial mon:stdio \
 	-monitor telnet:localhost:4444,server,nowait \
-	-drive file=disk.img,format=raw,index=0,media=disk
+	-drive file=disk.img,format=raw,index=0,media=disk,cache=none \
+	-m 256M
 
 clean:
 	rm -rf $(OBJ_DIR) iso $(KERNEL) $(ISO)

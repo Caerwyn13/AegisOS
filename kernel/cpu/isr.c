@@ -29,6 +29,13 @@ static const char *exceptions[] = {
 };
 
 void isr_handler(registers_t* regs) {
+	// Extra info for General Protection Fault
+	if (regs->int_no == 13) {
+		vga_printf_colour(LIGHT_RED, BLACK, "GPF! err=0x%x eip=0x%x cs=0x%x\n",
+			regs->err_code, regs->eip, regs->cs);
+		for(;;);
+	}
+
 	if (regs->int_no == 14) {
 		uint32_t fault_addr;
 		__asm__ volatile ("mov %%cr2, %0" : "=r"(fault_addr));

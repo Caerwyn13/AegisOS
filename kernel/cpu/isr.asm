@@ -37,16 +37,16 @@ ISR_NOERR 4
 ISR_NOERR 5
 ISR_NOERR 6
 ISR_NOERR 7
-ISR_NOERR 8
+ISR_ERR   8   ; double fault
 ISR_NOERR 9
-ISR_NOERR 10
-ISR_NOERR 11
-ISR_NOERR 12
-ISR_NOERR 13
-ISR_NOERR 14
+ISR_ERR   10  ; invalid TSS
+ISR_ERR   11  ; segment not present
+ISR_ERR   12  ; stack fault
+ISR_ERR   13  ; general protection fault  <-- THIS ONE
+ISR_ERR   14  ; page fault
 ISR_NOERR 15
 ISR_NOERR 16
-ISR_NOERR 17
+ISR_ERR   17  ; alignment check
 ISR_NOERR 18
 ISR_NOERR 19
 ISR_NOERR 20
@@ -59,7 +59,7 @@ ISR_NOERR 26
 ISR_NOERR 27
 ISR_NOERR 28
 ISR_NOERR 29
-ISR_NOERR 30
+ISR_ERR   30  ; security exception
 ISR_NOERR 31
 
 isr_common:
@@ -148,24 +148,44 @@ isr128:
 	push dword 128
 	jmp syscall_common
 
+
+extern process_exited
+extern return_func
+extern saved_kernel_esp
+
 syscall_common:
-	pusha
-	mov ax, ds
-	push eax
-	mov ax, 0x10
-	mov ds, ax
-	mov es, ax
-	mov fs, ax
-	mov gs, ax
-	push esp
-	call syscall_handler
-	pop eax
-	pop eax
-	mov ds, ax
-	mov es, ax
-	mov fs, ax
-	mov gs, ax
-	popa
-	add esp, 8
-	sti
-	iret
+    pusha
+    mov ax, ds
+    push eax
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    push esp
+    call syscall_handler
+    pop eax
+    pop eax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    popa
+    add esp, 8
+
+    ; check if process exited
+    cmp dword [process_exited], 1
+    je .process_exit
+    sti
+    iret
+
+.process_exit:
+    ; reset flag
+    mov dword [process_exited], 0
+    ; restore saved kernel stack
+    mov esp, [saved_kernel_esp]
+    sti
+    ; call return function
+    mov eax, [return_func]
+    call eax
+    hlt

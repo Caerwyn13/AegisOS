@@ -12,6 +12,8 @@
 #define SYS_CLOSE   5
 #define SYS_GETTIME 6
 
+extern int process_exited;
+
 void syscall_init();
 
 #endif // SYSCALL_H

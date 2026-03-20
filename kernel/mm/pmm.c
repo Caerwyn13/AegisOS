@@ -1,5 +1,6 @@
 #include "pmm.h"
 #include "serial.h"
+#include "vga.h"
 
 #define MAX_PAGES 0x100000    // 4 GB / 4096 
 
@@ -59,6 +60,13 @@ void pmm_init(multiboot_info_t* mbi) {
 
     // Mark first page as used (null ptr protection)
     bitmap_set(0);
+
+    vga_printf("PMM: %u free pages (%u MB)\n", 
+        free_pages, 
+        (free_pages * 4) / 1024);
+
+    volatile uint32_t i;
+    for (i = 0; i < 200000000; i++);
 }
 
 void* pmm_alloc() {

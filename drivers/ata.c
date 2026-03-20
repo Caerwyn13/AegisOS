@@ -1,6 +1,7 @@
 #include "ata.h"
 #include "ports.h"
 #include "vga.h"
+#include "pit.h"
 
 // Primary ATA bus
 #define ATA_PRIMARY_DATA         0x1F0
@@ -48,14 +49,18 @@ static void ata_select(uint32_t lba, uint8_t sectors) {
 }
 
 void ata_init() {
-    // soft reset
     outb(ATA_PRIMARY_DRIVE, 0xA0);
+
+    int i;
+    for (i = 0; i < 14; i++) inb(ATA_PRIMARY_STATUS);
+
     ata_wait();
 
-    // identify drive
     outb(ATA_PRIMARY_COMMAND, 0xEC);
-    uint8_t status = inb(ATA_PRIMARY_STATUS);
 
+    for (i = 0; i < 14; i++) inb(ATA_PRIMARY_STATUS);
+
+    uint8_t status = inb(ATA_PRIMARY_STATUS);
     if (status == 0) {
         vga_printf("ATA: no drive detected\n");
         return;
@@ -68,9 +73,8 @@ void ata_init() {
         return;
     }
 
-    // read identify data (discard)
+    // read and discard identify data to clear the buffer
     uint16_t buf[256];
-    int i;
     for (i = 0; i < 256; i++)
         buf[i] = inw(ATA_PRIMARY_DATA);
 

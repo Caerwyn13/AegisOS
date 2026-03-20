@@ -2,6 +2,7 @@
 #include "vga.h"
 #include "string.h"
 #include "pmm.h"
+#include "paging.h"
 #include "heap.h"
 #include "pit.h"
 #include "ports.h"
@@ -10,12 +11,14 @@
 #include "aegisfs.h"
 #include "ata.h"
 #include "elf.h"
+#include "usermode.h"
 
-#define BUFFER_SIZE  256
-#define HISTORY_SIZE 10
-#define MAX_ARGS     8
-#define HELP_PAGE_SIZE 8
-
+#define BUFFER_SIZE     256
+#define HISTORY_SIZE    10
+#define MAX_ARGS        8
+#define HELP_PAGE_SIZE  8
+#define USER_STACK_SIZE 0x4000   // 16KB
+#define USER_STACK_TOP  0x800000  // 8MB
 // ============================================================
 // State
 // ============================================================
@@ -130,6 +133,12 @@ static uint32_t parse_int(const char *str) {
     return val;
 }
 
+void shell_after_exec() {
+    vga_printf("Process exited\n");
+    print_prompt();
+    // shell loop will continue naturally
+}
+
 // ============================================================
 // DEBUG Commands
 // ============================================================
@@ -190,6 +199,18 @@ static void _cmd_syscalltest() {
     );
 }
 
+static void exec_returned() {
+    vga_printf("Free pages after: %u\n", pmm_free_pages());
+    paging_unmap_range(0x400000, 0x410000);
+    // free user stack
+    uint32_t i;
+    for (i = 0; i < 8; i++)
+        paging_unmap_range(0x8F000 - (i * 0x1000),
+                           0x8F000 - (i * 0x1000) + 0x1000);
+    vga_printf("Free pages freed: %u\n", pmm_free_pages());
+    print_prompt();
+}
+
 // ============================================================
 // Commands
 // ============================================================
@@ -235,7 +256,11 @@ static void cmd_write() {
         vga_printf("Written %u bytes to %s\n", strlen(buf), args[1]);
 }
 
+extern kernel_func_t return_func;
+extern void save_esp();
+
 static void cmd_exec() {
+    vga_printf("Free pages before: %u\n", pmm_free_pages());
     if (argc < 2) {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: exec <file>\n");
         return;
@@ -247,13 +272,15 @@ static void cmd_exec() {
         return;
     }
 
-    //vga_printf("Jumping to 0x%x\n", entry);
+    uint32_t i;
+    for (i = 0; i < 8; i++)
+        paging_map(0x8F000 - (i * 0x1000),
+                   0x8F000 - (i * 0x1000),
+                   PAGE_PRESENT | PAGE_RW | PAGE_USER);
 
-    // call the entry point
-    void (*program)() = (void (*)())entry;
-    program();
-
-    //vga_printf("Program returned\n");
+    save_esp();
+    return_func = exec_returned;
+    enter_usermode(entry, 0x8F000);
 }
 
 static void cmd_rm() {
@@ -417,7 +444,7 @@ static void cmd_reboot() {
     uint8_t val = 0;
     while (val & 0x02)
         val = inb(0x64);
-    outb(0x64, 0xFE);
+    outb(0x64, 0xFE); //TODO: FIX FOR VMs AND REAL HARDWARE
     while(1);
 }
 

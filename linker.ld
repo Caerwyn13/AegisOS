@@ -10,4 +10,9 @@ SECTIONS {
 	.bss : { *(.bss*) }
 
 	kernel_end = .;
+	
+	/DISCARD/ : {
+		*(.eh_frame)
+		*(.comment)
+	}
 }

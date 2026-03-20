@@ -27,6 +27,7 @@ static int fs_ready = 0;
 static void sb_read() {
     uint8_t buf[FS_BLOCK_SIZE];
     ata_read(SUPERBLOCK_LBA, 1, buf);
+    vga_printf("sb bytes: %x %x %x %x\n", buf[0], buf[1], buf[2], buf[3]);
     memcpy(&sb, buf, sizeof(fs_superblock_t));
 }
 
@@ -97,6 +98,7 @@ static uint32_t alloc_data_lba(uint32_t sectors_needed) {
 
 void fs_init() {
     sb_read();
+    vga_printf("magic: 0x%x expected: 0x%x\n", sb.magic, FS_MAGIC);
 
     if (sb.magic != FS_MAGIC) {
         vga_printf("formatting...\n");

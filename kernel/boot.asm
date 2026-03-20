@@ -11,6 +11,8 @@ align 4
 	dd FLAGS
 	dd CHECKSUM
 
+global stack_top
+
 section .bss
 align 16
 stack_bottom:
@@ -23,7 +25,7 @@ extern kernel_main
 
 _start:
 	mov esp, stack_top
-	push ebx			; Multiboot info ptr passed by GRUb in ebx
+	push ebx			; Multiboot info ptr passed by GRUB in ebx
 	call kernel_main
 	cli
 .hang:
