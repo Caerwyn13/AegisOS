@@ -40,7 +40,8 @@ void isr_handler(registers_t* regs) {
 		uint32_t fault_addr;
 		__asm__ volatile ("mov %%cr2, %0" : "=r"(fault_addr));
 		vga_printf_colour(LIGHT_RED, BLACK, "PAGE FAULT at 0x%x\n", fault_addr);
-		vga_printf("err: %u\n", regs->err_code);
+		vga_printf("err: %u eip: 0x%x cs: 0x%x esp: 0x%x\n",
+			regs->err_code, regs->eip, regs->cs, regs->esp);
 		for(;;);
 	}
 	print("EXCEPTION: ");

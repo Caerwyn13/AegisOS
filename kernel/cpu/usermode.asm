@@ -21,8 +21,7 @@ save_esp:
 enter_usermode:
     mov eax, [esp]
     mov [saved_kernel_eip], eax
-    lea eax, [esp+12]
-    mov [saved_kernel_esp], eax
+    mov [saved_kernel_esp], esp
 
     mov eax, [esp+4]
     mov ebx, [esp+8]
@@ -45,4 +44,4 @@ return_to_kernel:
     sti
     mov eax, [return_func]
     call eax
-    hlt
+    ret

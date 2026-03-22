@@ -42,7 +42,7 @@ ISR_NOERR 9
 ISR_ERR   10  ; invalid TSS
 ISR_ERR   11  ; segment not present
 ISR_ERR   12  ; stack fault
-ISR_ERR   13  ; general protection fault  <-- THIS ONE
+ISR_ERR   13  ; general protection fault
 ISR_ERR   14  ; page fault
 ISR_NOERR 15
 ISR_NOERR 16
@@ -152,6 +152,7 @@ isr128:
 extern process_exited
 extern return_func
 extern saved_kernel_esp
+extern saved_kernel_eip
 
 syscall_common:
     pusha
@@ -188,4 +189,6 @@ syscall_common:
     ; call return function
     mov eax, [return_func]
     call eax
-    hlt
+    ; continue after the original enter_usermode() call site
+    mov eax, [saved_kernel_eip]
+    jmp eax

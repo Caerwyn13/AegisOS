@@ -17,8 +17,6 @@
 #define HISTORY_SIZE    10
 #define MAX_ARGS        8
 #define HELP_PAGE_SIZE  8
-#define USER_STACK_SIZE 0x4000   // 16KB
-#define USER_STACK_TOP  0x800000  // 8MB
 // ============================================================
 // State
 // ============================================================
@@ -201,12 +199,10 @@ static void _cmd_syscalltest() {
 
 static void exec_returned() {
     vga_printf("Free pages after: %u\n", pmm_free_pages());
+
     paging_unmap_range(0x400000, 0x410000);
-    // free user stack
-    uint32_t i;
-    for (i = 0; i < 8; i++)
-        paging_unmap_range(0x8F000 - (i * 0x1000),
-                           0x8F000 - (i * 0x1000) + 0x1000);
+    paging_unmap_range(USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_TOP);
+
     vga_printf("Free pages freed: %u\n", pmm_free_pages());
     print_prompt();
 }
@@ -272,15 +268,9 @@ static void cmd_exec() {
         return;
     }
 
-    uint32_t i;
-    for (i = 0; i < 8; i++)
-        paging_map(0x8F000 - (i * 0x1000),
-                   0x8F000 - (i * 0x1000),
-                   PAGE_PRESENT | PAGE_RW | PAGE_USER);
-
     save_esp();
     return_func = exec_returned;
-    enter_usermode(entry, 0x8F000);
+    enter_usermode(entry, USER_STACK_TOP);
 }
 
 static void cmd_rm() {
