@@ -28,6 +28,7 @@ typedef enum {
 
 void vga_init();
 void vga_clear();
+void vga_reset_cursor();      // ← NEW: Call after usermode return
 void vga_putchar(char c);
 void vga_print(const char *str);
 void vga_printf(const char *fmt, ...);

@@ -2,18 +2,23 @@
 #include "pmm.h"
 #include "vga.h"
 #include "string.h"
+#include "memmap.h"
 
 #define EXTRA_PAGE_TABLES 8
+
 
 // ============================================================
 // State
 // ============================================================
+
+// Kernel stack mapped in every page directory
+uint8_t kernel_stack[KERNEL_STACK_SIZE] __attribute__((aligned(16)));
+uint32_t kernel_stack_top;
+
 static pde_t page_directory[1024] __attribute__((aligned(4096)));
 static pte_t kernel_page_table[1024] __attribute__((aligned(4096)));
 static pte_t extra_page_tables[EXTRA_PAGE_TABLES][1024] __attribute__((aligned(4096)));
 static int extra_page_table_used[EXTRA_PAGE_TABLES] = {0};
-
-extern uint32_t kernel_end;
 
 // ============================================================
 // Helpers
@@ -61,6 +66,14 @@ pte_t* get_page_table(uint32_t virt, int create, int user) {
     return (pte_t*)(page_directory[pdi] & ~0xFFF);
 }
 
+pde_t* paging_get_kernel_directory() {
+    return page_directory;
+}
+
+void paging_switch_directory(pde_t* dir) {
+    asm volatile("mov %0, %%cr3" :: "r"(dir));
+}
+
 // ============================================================
 // Public API
 // ============================================================
@@ -94,21 +107,27 @@ int paging_map_user_range(uint32_t virt_start, uint32_t virt_end, int writable) 
 
 void paging_unmap(uint32_t virt) {
     pte_t* pt = get_page_table(virt, 0, 0);
-    if (!pt) return;
+    if (!pt) return;  // Page table doesn't exist - skip
 
     uint32_t pti = (virt >> 12) & 0x3FF;
-    uint32_t phys = pt[pti] & ~0xFFF;
-
-    if (phys) {
+    uint32_t entry = pt[pti];
+    
+    if (!(entry & PAGE_PRESENT)) return;  // Page not mapped - skip
+    
+    uint32_t phys = entry & ~0xFFF;
+    
+    // Only free user pages (between 4MB and 32MB)
+    if (phys >= 0x400000 && phys < 0x2000000) {
         pmm_free((void*)phys);
     }
-
-    pt[pti] = 0;
+    
+    pt[pti] = 0;  // Clear the mapping
     flush_tlb(virt);
 }
 
 void paging_unmap_range(uint32_t virt_start, uint32_t virt_end) {
-    for (uint32_t v = virt_start; v < virt_end; v += 4096)
+    if (virt_start >= virt_end) return;  // Invalid range
+    for (uint32_t v = virt_start; v < virt_end; v += PAGE_SIZE)
         paging_unmap(v);
 }
 
@@ -120,24 +139,57 @@ uint32_t paging_get_phys(uint32_t virt) {
 }
 
 void paging_init() {
+    // Reserve page structures
     pmm_reserve_range((uint32_t)page_directory, sizeof(page_directory));
     pmm_reserve_range((uint32_t)kernel_page_table, sizeof(kernel_page_table));
     pmm_reserve_range((uint32_t)extra_page_tables, sizeof(extra_page_tables));
 
+    // Clear page directory and page tables
     memset(page_directory, 0, sizeof(page_directory));
+    memset(kernel_page_table, 0, sizeof(kernel_page_table));
 
+    // ============================================================
+    // 1. Identity-map kernel memory (text, data, bss, rodata, strings)
+    // ============================================================
+    extern uint32_t _kernel_start; // set in linker script
+    extern uint32_t kernel_end;        // set in linker script
+    uint32_t start = (uint32_t)&_kernel_start;
+    uint32_t end   = (uint32_t)&kernel_end;
+
+    for (uint32_t addr = start; addr < end; addr += 4096) {
+        paging_map(addr, addr, PAGE_PRESENT | PAGE_RW);
+        pmm_set_used(addr);
+    }
+
+    // ============================================================
+    // 2. Map first 4 MB with identity mapping (for kernel_page_table)
+    // ============================================================
     for (uint32_t i = 0; i < 1024; i++) {
         kernel_page_table[i] = (i * 4096) | PAGE_PRESENT | PAGE_RW;
         pmm_set_used(i * 4096);
     }
     page_directory[0] = (uint32_t)kernel_page_table | PAGE_PRESENT | PAGE_RW;
 
-    __asm__ volatile (
-        "mov %0, %%cr3\n"
-        "mov %%cr0, %%eax\n"
-        "or $0x80000000, %%eax\n"
-        "mov %%eax, %%cr0\n"
-        : : "r"(page_directory) : "eax"
+    // ============================================================
+    // 3. Map kernel stack at high virtual address
+    // ============================================================
+    uint32_t stack_virt = 0xFFC00000;
+    for (uint32_t i = 0; i < KERNEL_STACK_SIZE; i += 4096) {
+        paging_map(stack_virt + i, (uint32_t)&kernel_stack[i], PAGE_PRESENT | PAGE_RW);
+    }
+    kernel_stack_top = stack_virt + KERNEL_STACK_SIZE;
+
+    // ============================================================
+    // 4. Enable paging
+    // ============================================================
+    asm volatile(
+        "mov %0, %%cr3\n\t"
+        "mov %%cr0, %%eax\n\t"
+        "or $0x80000000, %%eax\n\t"
+        "mov %%eax, %%cr0\n\t"
+        :
+        : "r"(page_directory)
+        : "eax"
     );
 
     vga_printf("Paging enabled\n");

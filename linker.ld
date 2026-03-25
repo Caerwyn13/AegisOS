@@ -1,18 +1,22 @@
 ENTRY(_start)
 
 SECTIONS {
-	. = 1M;		/* LOAD AT 1MB */
-	
-	.multiboot : { *(.multiboot) }
-	.text : { *(.text*) }
-	.rodata : { *(.rodata*) }
-	.data : { *(.data*) }
-	.bss : { *(.bss*) }
+    . = 1M;  /* LOAD AT 1MB */
 
-	kernel_end = .;
-	
-	/DISCARD/ : {
-		*(.eh_frame)
-		*(.comment)
-	}
+    /* multiboot header */
+    .multiboot : { *(.multiboot) }
+
+    _kernel_start = .;
+
+    .text : { *(.text*) }
+    .rodata : { *(.rodata*) }
+    .data : { *(.data*) }
+    .bss : { *(.bss*) }
+
+    kernel_end = .;
+
+    /DISCARD/ : {
+        *(.eh_frame)
+        *(.comment)
+    }
 }

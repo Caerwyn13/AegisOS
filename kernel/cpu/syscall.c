@@ -6,16 +6,41 @@
 #include "aegisfs.h"
 #include "string.h"
 #include "usermode.h"
-
-// syscall handler - called from isr_common when int 0x80 fires
-// eax = syscall number
-// ebx = arg1, ecx = arg2, edx = arg3
+#include "paging.h"
+#include "memmap.h"
 
 int process_exited = 0;
 
+// extern kernel stack from paging.c
+extern uint8_t kernel_stack[KERNEL_STACK_SIZE];
+extern uint32_t kernel_stack_top;
+
+// User memory range
+#define USER_START 0x00400000
+#define USER_END   0x08000000
+
 static void sys_exit(int code) {
+    // Print exit info
     vga_printf("Process exited with code %d\n", code);
+
+    // Switch back to kernel page directory
+    pde_t* kernel_dir = paging_get_kernel_directory();
+    paging_switch_directory(kernel_dir);
+
+    // Switch to kernel stack (must be mapped in kernel page directory)
+    asm volatile("mov %0, %%esp" :: "r"(kernel_stack_top));
+
+    // Unmap all user-space pages
+    paging_unmap_range(USER_START, USER_END);
+
+    // Mark process as exited
     process_exited = 1;
+
+    // Return to shell main loop or halt if shell is not implemented
+    // For now we just loop safely
+    while (1) {
+        asm volatile("hlt");
+    }
 }
 
 static void sys_print(const char *str) {

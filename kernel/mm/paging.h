@@ -13,6 +13,8 @@ typedef uint32_t pde_t; // Page Directory Entry
 
 void paging_init();
 pte_t* get_page_table(uint32_t virt, int create, int user);
+pde_t* paging_get_kernel_directory();
+void paging_switch_directory(pde_t* dir);
 void paging_map(uint32_t virt, uint32_t phys, uint32_t flags);
 void paging_unmap(uint32_t virt);
 void paging_unmap_range(uint32_t virt_start, uint32_t virt_end);

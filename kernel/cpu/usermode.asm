@@ -2,29 +2,25 @@ bits 32
 
 section .data
 global saved_kernel_esp
-global saved_kernel_eip
-global return_func
+global saved_kernel_ebp
+global saved_kernel_eip        ; ← ADD THIS
 
 saved_kernel_esp dd 0
-saved_kernel_eip dd 0
-return_func      dd 0
+saved_kernel_ebp dd 0
+saved_kernel_eip dd 0          ; ← ADD THIS
 
 section .text
 global enter_usermode
-global return_to_kernel
-global save_esp
-
-save_esp:
-    mov [saved_kernel_esp], esp
-    ret
 
 enter_usermode:
-    mov eax, [esp]
-    mov [saved_kernel_eip], eax
+    ; [esp] = return addr, [esp+4] = User EIP, [esp+8] = User ESP
+    mov ecx, [esp]             ; Save return address
+    mov eax, [esp+4]           ; User EIP
+    mov ebx, [esp+8]           ; User ESP
+    
     mov [saved_kernel_esp], esp
-
-    mov eax, [esp+4]
-    mov ebx, [esp+8]
+    mov [saved_kernel_ebp], ebp
+    mov [saved_kernel_eip], ecx    ; ← Save return address!
 
     mov cx, 0x23
     mov ds, cx
@@ -38,10 +34,3 @@ enter_usermode:
     push dword 0x1B
     push eax
     iret
-
-return_to_kernel:
-    mov esp, [saved_kernel_esp]
-    sti
-    mov eax, [return_func]
-    call eax
-    ret

@@ -8,6 +8,8 @@
 // ============================================================
 
 #define VGA_ADDRESS 0xB8000
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
 
 static uint16_t *vga  = (uint16_t *)VGA_ADDRESS;
 static int       cursor_x = 0;
@@ -132,7 +134,13 @@ static void vga_printf_args(const char *fmt, va_list args) {
 // ============================================================
 
 void vga_update_cursor() {
-    uint16_t pos = cursor_y * VGA_WIDTH + cursor_x;
+    // CRITICAL: Force valid range to prevent crash on corrupted values
+    if (cursor_x < 0) cursor_x = 0;
+    if (cursor_x >= VGA_WIDTH) cursor_x = VGA_WIDTH - 1;
+    if (cursor_y < 0) cursor_y = 0;
+    if (cursor_y >= VGA_HEIGHT) cursor_y = VGA_HEIGHT - 1;
+    
+    uint16_t pos = (uint16_t)(cursor_y * VGA_WIDTH + cursor_x);
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
@@ -141,6 +149,8 @@ void vga_update_cursor() {
 
 void vga_init() {
     colour = make_colour(WHITE, BLACK);
+    cursor_x = 0;
+    cursor_y = 0;
     vga_clear();
 }
 
@@ -148,6 +158,13 @@ void vga_clear() {
     int i;
     for (i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
         vga[i] = make_entry(' ', colour);
+    cursor_x = 0;
+    cursor_y = 0;
+    vga_update_cursor();
+}
+
+// NEW: Reset cursor to safe values (call after usermode return)
+void vga_reset_cursor() {
     cursor_x = 0;
     cursor_y = 0;
     vga_update_cursor();
@@ -162,6 +179,21 @@ int vga_get_row() {
 }
 
 void vga_putchar(char c) {
+    // CRITICAL: Force valid range BEFORE any array access
+    if (cursor_x < 0) cursor_x = 0;
+    if (cursor_x >= VGA_WIDTH) cursor_x = VGA_WIDTH - 1;
+    if (cursor_y < 0) cursor_y = 0;
+    if (cursor_y >= VGA_HEIGHT) {
+        // Scroll instead of crashing
+        int i;
+        for (i = 0; i < (VGA_HEIGHT - 1) * VGA_WIDTH; i++)
+            vga[i] = vga[i + VGA_WIDTH];
+        for (i = (VGA_HEIGHT - 1) * VGA_WIDTH; i < VGA_HEIGHT * VGA_WIDTH; i++)
+            vga[i] = make_entry(' ', colour);
+        cursor_y = VGA_HEIGHT - 1;
+        cursor_x = 0;
+    }
+    
     if (c == '\n') {
         cursor_x = 0;
         cursor_y++;
@@ -176,11 +208,14 @@ void vga_putchar(char c) {
         cursor_x = (cursor_x + 8) & ~7;
     } else {
         vga[cursor_y * VGA_WIDTH + cursor_x] = make_entry(c, colour);
-        if (++cursor_x >= VGA_WIDTH) {
-            cursor_x = 0;
-            cursor_y++;
-        }
+        cursor_x++;
     }
+    
+    if (cursor_x >= VGA_WIDTH) {
+        cursor_x = 0;
+        cursor_y++;
+    }
+    
     scroll();
     vga_update_cursor();
 }
