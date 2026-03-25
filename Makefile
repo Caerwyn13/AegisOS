@@ -4,7 +4,7 @@ CD  := gcc
 LD  := ld
 
 ASMFLAGS := -f elf32
-CIMPS    := -Iinclude -Idrivers -Iports -Ikernel/cpu -Ikernel/mm -Ikernel/shell -Ikernel/lib -Ikernel/fs
+CIMPS    := -Iinclude -Idrivers -Iports -Ikernel/cpu -Ikernel/mm -Ikernel/shell -Ikernel/lib -Ikernel/fs -Ikernel/games/snake
 CFLAGS   := -m32 -ffreestanding -fno-stack-protector -nostdlib -nodefaultlibs -Wall -Wextra ${CIMPS}
 LDFLAGS  := -m elf_i386 -T linker.ld
 

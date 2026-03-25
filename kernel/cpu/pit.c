@@ -9,9 +9,16 @@
 static volatile uint32_t ticks = 0;
 static uint32_t frequency      = 0;
 
+// Callback for PIT events (can be set by other modules, e.g., Snake)
+static void (*pit_callback)(void) = 0;
+
 static void pit_handler(registers_t *regs) {
     (void)regs;
     ticks++;
+
+    // Call the callback if set
+    if (pit_callback)
+        pit_callback();
 }
 
 void pit_init(uint32_t freq) {
@@ -23,6 +30,11 @@ void pit_init(uint32_t freq) {
     outb(PIT_CHANNEL0, (uint8_t)((divisor >> 8) & 0xFF));
 
     irq_register(0, pit_handler);
+}
+
+// Set a PIT callback
+void pit_set_callback(void (*callback)(void)) {
+    pit_callback = callback;
 }
 
 uint32_t pit_ticks() {

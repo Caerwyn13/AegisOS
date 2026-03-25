@@ -4,23 +4,24 @@
 #include "types.h"
 
 // ============================================================
-// State
+// Text mode state
 // ============================================================
-
-#define VGA_ADDRESS 0xB8000
-#define VGA_WIDTH 80
-#define VGA_HEIGHT 25
-
-static uint16_t *vga  = (uint16_t *)VGA_ADDRESS;
+static uint16_t *vga_text_buffer = (uint16_t *)0xB8000;
 static int       cursor_x = 0;
 static int       cursor_y = 0;
-static uint8_t   colour   = 0;
+static uint8_t   text_colour = 0;
 
 // ============================================================
-// Internal helpers
+// Graphics mode state
+// ============================================================
+static uint8_t *vga_graphics_buffer = (uint8_t *)0xA0000;
+static uint8_t current_mode = VGA_MODE_TEXT;
+
+// ============================================================
+// Helpers
 // ============================================================
 
-static uint16_t make_entry(char c, uint8_t col) {
+static uint16_t make_text_entry(char c, uint8_t col) {
     return (uint16_t)c | ((uint16_t)col << 8);
 }
 
@@ -28,24 +29,23 @@ static uint8_t make_colour(vga_colour_t fg, vga_colour_t bg) {
     return fg | (bg << 4);
 }
 
-static void scroll() {
-    if (cursor_y >= VGA_HEIGHT) {
-        int i;
-        for (i = 0; i < (VGA_HEIGHT - 1) * VGA_WIDTH; i++)
-            vga[i] = vga[i + VGA_WIDTH];
-        for (i = (VGA_HEIGHT - 1) * VGA_WIDTH; i < VGA_HEIGHT * VGA_WIDTH; i++)
-            vga[i] = make_entry(' ', colour);
-        cursor_y = VGA_HEIGHT - 1;
+static void scroll_text() {
+    if (cursor_y >= VGA_TEXT_HEIGHT) {
+        for (int i = 0; i < (VGA_TEXT_HEIGHT - 1) * VGA_TEXT_WIDTH; i++)
+            vga_text_buffer[i] = vga_text_buffer[i + VGA_TEXT_WIDTH];
+        for (int i = (VGA_TEXT_HEIGHT - 1) * VGA_TEXT_WIDTH; i < VGA_TEXT_HEIGHT * VGA_TEXT_WIDTH; i++)
+            vga_text_buffer[i] = make_text_entry(' ', text_colour);
+        cursor_y = VGA_TEXT_HEIGHT - 1;
     }
 }
 
+// Simple decimal printing
 static void print_uint(uint32_t n, int width, int zero_pad) {
     char tmp[16];
-    int  i = 0;
+    int i = 0;
 
-    if (n == 0) {
-        tmp[i++] = '0';
-    } else {
+    if (n == 0) tmp[i++] = '0';
+    else {
         while (n > 0) {
             tmp[i++] = '0' + (n % 10);
             n /= 10;
@@ -55,14 +55,14 @@ static void print_uint(uint32_t n, int width, int zero_pad) {
     while (i < width)
         tmp[i++] = zero_pad ? '0' : ' ';
 
-    int j;
-    for (j = i - 1; j >= 0; j--)
+    for (int j = i - 1; j >= 0; j--)
         vga_putchar(tmp[j]);
 }
 
+// Hex printing
 static void print_hex(uint32_t n) {
     char hex[9];
-    int  i = 7;
+    int i = 7;
     hex[8] = 0;
     while (i >= 0) {
         hex[i--] = "0123456789ABCDEF"[n & 0xF];
@@ -73,19 +73,16 @@ static void print_hex(uint32_t n) {
     while (*p) vga_putchar(*p++);
 }
 
+// Core printf logic
 static void vga_printf_args(const char *fmt, va_list args) {
     while (*fmt) {
         if (*fmt != '%') { vga_putchar(*fmt++); continue; }
         fmt++;
 
-        int left_align = 0;
-        int zero_pad   = 0;
-        int width      = 0;
-
+        int left_align = 0, zero_pad = 0, width = 0;
         if (*fmt == '-') { left_align = 1; fmt++; }
-        if (*fmt == '0') { zero_pad   = 1; fmt++; }
-        while (*fmt >= '0' && *fmt <= '9')
-            width = width * 10 + (*fmt++ - '0');
+        if (*fmt == '0') { zero_pad = 1; fmt++; }
+        while (*fmt >= '0' && *fmt <= '9') width = width * 10 + (*fmt++ - '0');
 
         switch (*fmt) {
             case 'd': {
@@ -130,17 +127,16 @@ static void vga_printf_args(const char *fmt, va_list args) {
 }
 
 // ============================================================
-// Public API
+// Text mode API
 // ============================================================
 
 void vga_update_cursor() {
-    // CRITICAL: Force valid range to prevent crash on corrupted values
     if (cursor_x < 0) cursor_x = 0;
-    if (cursor_x >= VGA_WIDTH) cursor_x = VGA_WIDTH - 1;
+    if (cursor_x >= VGA_TEXT_WIDTH) cursor_x = VGA_TEXT_WIDTH - 1;
     if (cursor_y < 0) cursor_y = 0;
-    if (cursor_y >= VGA_HEIGHT) cursor_y = VGA_HEIGHT - 1;
-    
-    uint16_t pos = (uint16_t)(cursor_y * VGA_WIDTH + cursor_x);
+    if (cursor_y >= VGA_TEXT_HEIGHT) cursor_y = VGA_TEXT_HEIGHT - 1;
+
+    uint16_t pos = cursor_y * VGA_TEXT_WIDTH + cursor_x;
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
@@ -148,22 +144,22 @@ void vga_update_cursor() {
 }
 
 void vga_init() {
-    colour = make_colour(WHITE, BLACK);
+    current_mode = VGA_MODE_TEXT;
+    text_colour = make_colour(WHITE, BLACK);
     cursor_x = 0;
     cursor_y = 0;
     vga_clear();
 }
 
 void vga_clear() {
-    int i;
-    for (i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
-        vga[i] = make_entry(' ', colour);
+    if (current_mode != VGA_MODE_TEXT) return;
+    for (int i = 0; i < VGA_TEXT_WIDTH * VGA_TEXT_HEIGHT; i++)
+        vga_text_buffer[i] = make_text_entry(' ', text_colour);
     cursor_x = 0;
     cursor_y = 0;
     vga_update_cursor();
 }
 
-// NEW: Reset cursor to safe values (call after usermode return)
 void vga_reset_cursor() {
     cursor_x = 0;
     cursor_y = 0;
@@ -171,7 +167,7 @@ void vga_reset_cursor() {
 }
 
 void vga_set_colour(vga_colour_t fg, vga_colour_t bg) {
-    colour = make_colour(fg, bg);
+    text_colour = make_colour(fg, bg);
 }
 
 int vga_get_row() {
@@ -179,50 +175,29 @@ int vga_get_row() {
 }
 
 void vga_putchar(char c) {
-    // CRITICAL: Force valid range BEFORE any array access
-    if (cursor_x < 0) cursor_x = 0;
-    if (cursor_x >= VGA_WIDTH) cursor_x = VGA_WIDTH - 1;
-    if (cursor_y < 0) cursor_y = 0;
-    if (cursor_y >= VGA_HEIGHT) {
-        // Scroll instead of crashing
-        int i;
-        for (i = 0; i < (VGA_HEIGHT - 1) * VGA_WIDTH; i++)
-            vga[i] = vga[i + VGA_WIDTH];
-        for (i = (VGA_HEIGHT - 1) * VGA_WIDTH; i < VGA_HEIGHT * VGA_WIDTH; i++)
-            vga[i] = make_entry(' ', colour);
-        cursor_y = VGA_HEIGHT - 1;
-        cursor_x = 0;
-    }
-    
-    if (c == '\n') {
-        cursor_x = 0;
-        cursor_y++;
-    } else if (c == '\r') {
-        cursor_x = 0;
-    } else if (c == '\b') {
+    if (current_mode != VGA_MODE_TEXT) return;
+
+    if (c == '\n') { cursor_x = 0; cursor_y++; }
+    else if (c == '\r') { cursor_x = 0; }
+    else if (c == '\b') {
         if (cursor_x > 0) {
             cursor_x--;
-            vga[cursor_y * VGA_WIDTH + cursor_x] = make_entry(' ', colour);
+            vga_text_buffer[cursor_y * VGA_TEXT_WIDTH + cursor_x] = make_text_entry(' ', text_colour);
         }
     } else if (c == '\t') {
         cursor_x = (cursor_x + 8) & ~7;
     } else {
-        vga[cursor_y * VGA_WIDTH + cursor_x] = make_entry(c, colour);
+        vga_text_buffer[cursor_y * VGA_TEXT_WIDTH + cursor_x] = make_text_entry(c, text_colour);
         cursor_x++;
     }
-    
-    if (cursor_x >= VGA_WIDTH) {
-        cursor_x = 0;
-        cursor_y++;
-    }
-    
-    scroll();
+
+    if (cursor_x >= VGA_TEXT_WIDTH) { cursor_x = 0; cursor_y++; }
+    scroll_text();
     vga_update_cursor();
 }
 
 void vga_print(const char *str) {
-    while (*str)
-        vga_putchar(*str++);
+    while (*str) vga_putchar(*str++);
 }
 
 void vga_printf(const char *fmt, ...) {
@@ -233,11 +208,49 @@ void vga_printf(const char *fmt, ...) {
 }
 
 void vga_printf_colour(vga_colour_t fg, vga_colour_t bg, const char *fmt, ...) {
-    uint8_t old = colour;
+    uint8_t old = text_colour;
     vga_set_colour(fg, bg);
     va_list args;
     va_start(args, fmt);
     vga_printf_args(fmt, args);
     va_end(args);
-    colour = old;
+    text_colour = old;
+}
+
+// ============================================================
+// Graphics mode API
+// ============================================================
+
+void vga_set_mode(uint8_t mode) {
+    current_mode = mode;
+
+    if (mode == VGA_MODE_13H) {
+        // BIOS interrupt 0x10 AH=0x00 AL=0x13
+        asm volatile(
+            "int $0x10"
+            :
+            : "a"(0x0013)
+        );
+        vga_graphics_buffer = (uint8_t*)0xA0000;
+    }
+}
+
+void vga_putpixel(uint32_t x, uint32_t y, uint8_t colour) {
+    if (current_mode != VGA_MODE_13H) return;
+    if (x >= VGA_13H_WIDTH || y >= VGA_13H_HEIGHT) return;
+    vga_graphics_buffer[y * VGA_13H_WIDTH + x] = colour;
+}
+
+void vga_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint8_t colour) {
+    if (current_mode != VGA_MODE_13H) return;
+    for (uint32_t j = 0; j < h; j++)
+        for (uint32_t i = 0; i < w; i++)
+            vga_putpixel(x + i, y + j, colour);
+}
+
+void vga_clear_graphics(uint8_t colour) {
+    if (current_mode != VGA_MODE_13H) return;
+    for (uint32_t y = 0; y < VGA_13H_HEIGHT; y++)
+        for (uint32_t x = 0; x < VGA_13H_WIDTH; x++)
+            vga_putpixel(x, y, colour);
 }

@@ -13,6 +13,8 @@
 #include "elf.h"
 #include "usermode.h"
 
+#include "snake.h"
+
 #define BUFFER_SIZE     256
 #define HISTORY_SIZE    10
 #define MAX_ARGS        8
@@ -38,6 +40,7 @@ static const char *help_lines[] = {
     "  clear                  - clear the screen",
     "  clear -c <colour>      - clear with background colour",
     "  echo <text>            - print text",
+    "  snake                  - play snake",
     "  mem                    - show free memory",
     "  memmap                 - show memory map",
     "  heap                   - shows the heap",
@@ -419,6 +422,17 @@ static void cmd_history() {
         vga_printf("%d  %s\n", i + 1, history[i]);
 }
 
+static void cmd_snake() {
+    vga_clear();        // clear screen
+    snake_init();       // initialize game
+
+    // Set up PIT timer to call snake_update automatically
+    // We'll assume PIT callback registration exists:
+    pit_set_callback(snake_update);
+
+    vga_printf_colour(LIGHT_CYAN, BLACK, "Use arrow keys to move. Press Ctrl+C to exit.\n");
+}
+
 static void cmd_about() {
     vga_printf_colour(LIGHT_CYAN, BLACK, "========== ABOUT AegisOS ==========\n");
     vga_printf("A simple x86 OS written solely by ");
@@ -469,6 +483,7 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "rm")       == 0) cmd_rm();
     else if (strcmp(args[0], "touch")    == 0) cmd_touch();
     else if (strcmp(args[0], "exec")     == 0) cmd_exec();
+    else if (strcmp(args[0], "snake")    == 0) cmd_snake();
 
     else if (strcmp(args[0], "atatest")     == 0) _cmd_atatest();
     else if (strcmp(args[0], "inodetest")   == 0) _cmd_inodetest();

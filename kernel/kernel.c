@@ -23,7 +23,6 @@ void (*exec_return_callback)() = 0;
 void kernel_main(multiboot_info_t *mbi) {
     serial_init();
     vga_init();
-    vga_clear();
     gdt_init();
     tss_set_kernel_stack((uint32_t)&stack_top);
     idt_init();
@@ -41,6 +40,7 @@ void kernel_main(multiboot_info_t *mbi) {
     pit_sleep(500);   
     fs_init();
     syscall_init();
+    vga_clear();
     shell_init(mbi);
     while(1);
 }
