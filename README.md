@@ -41,7 +41,7 @@ A simple x86 operating system written in C and NASM assembly.
 | `net` | Show the network interface configuration |
 | `ping <IPv4\|hostname>` | Send four ICMP echo requests to an IPv4 address or resolve and ping a hostname |
 | `tcp <IPv4\|hostname> <port>` | Open a TCP connection, then attempt a clean close |
-| `http <IPv4\|hostname>` | Fetch and display a bounded HTTP homepage response |
+| `http <IPv4\|hostname> [path]` | Fetch an HTTP path and display its status and bounded response body |
 | `mem` | Show free memory in KB |
 | `memmap` | Show the GRUB memory map |
 | `uptime` | Show system uptime |
@@ -89,8 +89,17 @@ work, but hostname lookups cannot. `ping` sends four ICMP echo requests.
 The `tcp` command is a connection test only; it does not send or receive
 application data. For example, `tcp example.com 80` attempts a TCP handshake
 and graceful close.
-The `http` command performs a plain HTTP/1.0 GET request for `/` on port 80 and
-displays up to 1023 response bytes. HTTPS is not supported.
+The `http` command performs a plain HTTP/1.0 GET request on port 80. An
+optional absolute path selects a resource; if omitted, `/` is requested.
+Response headers are parsed to show the HTTP status, and up to 1023 response
+bytes are retained for displaying the body. For example:
+
+```text
+http example.com
+http example.com /robots.txt
+```
+
+HTTPS is not supported.
 
 `make run` enables the QEMU e1000 adapter and user-mode network. When launching
 QEMU manually, include:

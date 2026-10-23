@@ -26,7 +26,7 @@ int net_parse_ipv4(const char *text, uint32_t *address);
 int net_ping_ipv4(uint32_t destination, net_ping_result_t *result);
 int net_resolve_ipv4(const char *hostname, uint32_t *address);
 int net_tcp_connect_close(uint32_t destination, uint16_t port);
-int net_http_get(uint32_t destination, const char *host, char *response,
-                 uint16_t response_capacity, uint16_t *response_length,
-                 uint8_t *truncated);
+int net_http_get(uint32_t destination, const char *host, const char *path,
+                 char *response, uint16_t response_capacity,
+                 uint16_t *response_length, uint8_t *truncated);
 #endif

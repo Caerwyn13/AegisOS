@@ -23,6 +23,7 @@
 #define HELP_PAGE_SIZE  8
 #define KEY_QUEUE_SIZE  128
 #define HTTP_RESPONSE_CAPACITY 1024
+#define HTTP_PATH_MAX_LENGTH 200
 // ============================================================
 // State
 // ============================================================
@@ -52,7 +53,7 @@ static const char *help_lines[] = {
     "  net                    - show network interface status",
     "  ping <IPv4|hostname>   - ping an IPv4 address or hostname",
     "  tcp <IPv4|hostname> <port> - test and close a TCP connection",
-    "  http <IPv4|hostname>   - fetch the HTTP homepage",
+    "  http <IPv4|hostname> [path] - fetch an HTTP path",
     "  mem                    - show free memory",
     "  memmap                 - show memory map",
     "  heap                   - shows the heap",
@@ -661,10 +662,73 @@ static void cmd_tcp() {
     }
 }
 
+static int http_response_body_offset(const char *response, uint16_t length) {
+    for (uint32_t i = 0; i + 3 < length; i++) {
+        if (response[i] == '\r' && response[i + 1] == '\n' &&
+            response[i + 2] == '\r' && response[i + 3] == '\n')
+            return i + 4;
+    }
+    return -1;
+}
+
+static int http_response_status(const char *response, uint16_t length,
+                                uint16_t *status_code) {
+    if (length < 12 || response[0] != 'H' || response[1] != 'T' ||
+        response[2] != 'T' || response[3] != 'P' || response[4] != '/')
+        return -1;
+
+    uint32_t index = 5;
+    while (index < length && response[index] != ' ')
+        index++;
+    while (index < length && response[index] == ' ')
+        index++;
+    if (index + 3 > length ||
+        response[index] < '0' || response[index] > '9' ||
+        response[index + 1] < '0' || response[index + 1] > '9' ||
+        response[index + 2] < '0' || response[index + 2] > '9')
+        return -1;
+
+    *status_code = (uint16_t)((response[index] - '0') * 100 +
+                              (response[index + 1] - '0') * 10 +
+                              (response[index + 2] - '0'));
+    return 0;
+}
+
+static void http_print_text(const char *text, uint16_t length) {
+    for (uint32_t i = 0; i < length; i++) {
+        char c = text[i];
+        if (c == '\r')
+            continue;
+        if (c == '\n' || c == '\t' || (c >= 32 && c <= 126))
+            vga_putchar(c);
+        else
+            vga_putchar('.');
+    }
+    if (length && text[length - 1] != '\n')
+        vga_putchar('\n');
+}
+
 static void cmd_http() {
-    if (argc != 2) {
+    if (argc != 2 && argc != 3) {
         vga_printf_colour(LIGHT_RED, BLACK,
-                          "Usage: http <IPv4|hostname>\n");
+                          "Usage: http <IPv4|hostname> [path]\n");
+        return;
+    }
+
+    const char *path = argc == 3 ? args[2] : "/";
+    uint32_t path_length = 0;
+    while (path[path_length]) {
+        path_length++;
+        if (path_length > HTTP_PATH_MAX_LENGTH) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "http: path is too long (maximum %u characters)\n",
+                              HTTP_PATH_MAX_LENGTH);
+            return;
+        }
+    }
+    if (path[0] != '/') {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "http: path must begin with '/'\n");
         return;
     }
 
@@ -687,26 +751,30 @@ static void cmd_http() {
     static char response[HTTP_RESPONSE_CAPACITY];
     uint16_t response_length = 0;
     uint8_t truncated = 0;
-    vga_printf("GET http://%s/ (", args[1]);
+    vga_printf("GET http://%s%s (", args[1], path);
     print_ipv4(destination);
     vga_printf(")\n");
 
-    int status = net_http_get(destination, args[1], response,
+    int status = net_http_get(destination, args[1], path, response,
                               sizeof(response), &response_length, &truncated);
     if (response_length) {
-        vga_printf("--- HTTP response (%u bytes%s) ---\n",
-                   response_length, truncated ? ", truncated" : "");
-        for (uint32_t i = 0; i < response_length; i++) {
-            char c = response[i];
-            if (c == '\r')
-                continue;
-            if (c == '\n' || c == '\t' || (c >= 32 && c <= 126))
-                vga_putchar(c);
-            else
-                vga_putchar('.');
+        uint16_t status_code;
+        int body_offset = http_response_body_offset(response, response_length);
+        if (http_response_status(response, response_length, &status_code) == 0)
+            vga_printf("HTTP status: %u\n", status_code);
+        else
+            vga_printf("HTTP status: unavailable\n");
+
+        if (body_offset >= 0) {
+            vga_printf("--- response body%s ---\n",
+                       truncated ? " (truncated)" : "");
+            http_print_text(response + body_offset,
+                            response_length - body_offset);
+        } else {
+            vga_printf_colour(YELLOW, BLACK,
+                              "HTTP headers incomplete; showing received response\n");
+            http_print_text(response, response_length);
         }
-        if (response[response_length - 1] != '\n')
-            vga_putchar('\n');
     }
 
     if (status == 0) {

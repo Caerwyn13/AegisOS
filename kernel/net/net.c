@@ -1026,11 +1026,12 @@ int net_tcp_connect_close(uint32_t destination, uint16_t port) {
     return -5;
 }
 
-int net_http_get(uint32_t destination, const char *host, char *response,
-                 uint16_t response_capacity, uint16_t *response_length,
-                 uint8_t *truncated) {
+int net_http_get(uint32_t destination, const char *host, const char *path,
+                 char *response, uint16_t response_capacity,
+                 uint16_t *response_length, uint8_t *truncated) {
     if (!interface_info.available || !destination || !host || !*host ||
-        !response || response_capacity == 0 || !response_length || !truncated)
+        !path || path[0] != '/' || !response || response_capacity == 0 ||
+        !response_length || !truncated)
         return -1;
 
     uint32_t host_length = 0;
@@ -1043,18 +1044,43 @@ int net_http_get(uint32_t destination, const char *host, char *response,
             return -1;
     }
 
-    char request[320];
-    static const char request_prefix[] = "GET / HTTP/1.0\r\nHost: ";
+    uint32_t path_length = 0;
+    for (const char *p = path; *p; p++) {
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '/' || c == '?' ||
+              c == '&' || c == '=' || c == '%' || c == '-' ||
+              c == '.' || c == '_' || c == '~' || c == ':' ||
+              c == '@' || c == '!' || c == '$' || c == '\'' ||
+              c == '(' || c == ')' || c == '*' || c == '+' ||
+              c == ',' || c == ';'))
+            return -1;
+        if (++path_length > 200)
+            return -1;
+    }
+
+    if (path_length == 0)
+        return -1;
+
+    char request[512];
+    static const char request_prefix[] = "GET ";
+    static const char request_middle[] = " HTTP/1.0\r\nHost: ";
     static const char request_suffix[] = "\r\nConnection: close\r\n\r\n";
     uint32_t prefix_length = sizeof(request_prefix) - 1;
+    uint32_t middle_length = sizeof(request_middle) - 1;
     uint32_t suffix_length = sizeof(request_suffix) - 1;
-    uint32_t request_length = prefix_length + host_length + suffix_length;
+    uint32_t request_length = prefix_length + path_length + middle_length +
+                              host_length + suffix_length;
     if (request_length > sizeof(request))
         return -1;
 
     uint32_t cursor = 0;
     for (uint32_t i = 0; i < prefix_length; i++)
         request[cursor++] = request_prefix[i];
+    for (uint32_t i = 0; i < path_length; i++)
+        request[cursor++] = path[i];
+    for (uint32_t i = 0; i < middle_length; i++)
+        request[cursor++] = request_middle[i];
     for (uint32_t i = 0; i < host_length; i++)
         request[cursor++] = host[i];
     for (uint32_t i = 0; i < suffix_length; i++)
