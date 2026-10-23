@@ -25,7 +25,7 @@ A simple x86 operating system written in C and NASM assembly.
 - Syscall interface (`int 0x80`) for userspace programs
 - ACPI shutdown and reboot support
 - Preemptive round-robin scheduling for kernel tasks
-- QEMU e1000 network interface with IPv4 ping
+- QEMU e1000 networking with DHCP, DNS lookups, and IPv4 ping
 - Interactive shell with command history and pagination
 
 ## Shell Commands
@@ -39,7 +39,7 @@ A simple x86 operating system written in C and NASM assembly.
 | `echo <text>` | Print text to the screen |
 | `rps <choice>` | Play rock-paper-scissors (`rock`, `paper`, or `scissors`) against AegisOS |
 | `net` | Show the network interface configuration |
-| `ping <IPv4>` | Send four ICMP echo requests to an IPv4 address |
+| `ping <IPv4\|hostname>` | Send four ICMP echo requests to an IPv4 address or resolve and ping a hostname |
 | `mem` | Show free memory in KB |
 | `memmap` | Show the GRUB memory map |
 | `uptime` | Show system uptime |
@@ -71,12 +71,19 @@ AegisOS shows both choices and the result. Run the command again to play another
 
 ## Networking
 
-The initial network driver supports QEMU's emulated Intel e1000 adapter. The
-network manager uses QEMU user-mode networking's default static guest address
-(`10.0.2.15`), gateway (`10.0.2.2`), and `/24` netmask. Run `net` to display
-the interface configuration, or `ping 10.0.2.2` to send ICMP echo requests.
-The initial implementation accepts dotted IPv4 addresses only; DNS names and
-DHCP are not supported.
+The network driver supports QEMU's emulated Intel e1000 adapter. At startup,
+the network manager obtains the guest IPv4 address, netmask, gateway, and DNS
+server using DHCP. Run `net` to display the configuration, or use `ping` with
+an IPv4 address or hostname:
+
+```text
+ping 10.0.2.2
+ping example.com
+```
+
+Hostname lookups use the DNS server provided by DHCP and support IPv4 address
+(A) records. If DHCP does not provide a DNS server, numeric-address pings still
+work, but hostname lookups cannot. `ping` sends four ICMP echo requests.
 
 `make run` enables the QEMU e1000 adapter and user-mode network. When launching
 QEMU manually, include:
@@ -85,8 +92,8 @@ QEMU manually, include:
 -netdev user,id=net0 -device e1000,netdev=net0
 ```
 
-Physical network cards and VirtualBox networking are not supported by this
-initial driver.
+Only QEMU's emulated e1000 adapter with user-mode networking is supported;
+physical network cards and VirtualBox networking are not supported.
 
 ## Syscall Interface
 

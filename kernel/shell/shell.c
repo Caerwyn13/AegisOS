@@ -49,7 +49,7 @@ static const char *help_lines[] = {
     "  rps <choice>           - play rock-paper-scissors",
     "  taskdemo               - demonstrate multitasking",
     "  net                    - show network interface status",
-    "  ping <IPv4>            - ping an IPv4 address",
+    "  ping <IPv4|hostname>   - ping an IPv4 address or hostname",
     "  mem                    - show free memory",
     "  memmap                 - show memory map",
     "  heap                   - shows the heap",
@@ -200,7 +200,7 @@ static void _cmd_atatest() {
 
 static void _cmd_syscalltest() {
     __asm__ volatile (
-        "mov %0, %%ebx\n"      // SYS_PRINT
+    "mov %0, %%ebx\n"      // SYS_PRINT
         "mov $1, %%eax\n"     // String pointer
         "int $0x80\n"
         : : "r"("Syscalls work!\n")
@@ -507,21 +507,22 @@ static void cmd_net() {
     print_ipv4(info.netmask);
     vga_printf("\nGateway: ");
     print_ipv4(info.gateway);
+    vga_printf("\nDNS: ");
+    if (info.dns_server)
+        print_ipv4(info.dns_server);
+    else
+        vga_printf("not provided by DHCP");
     vga_putchar('\n');
 }
 
 static void cmd_ping() {
     if (argc != 2) {
-        vga_printf_colour(LIGHT_RED, BLACK, "Usage: ping <IPv4>\n");
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: ping <IPv4|hostname>\n");
         return;
     }
 
     uint32_t destination;
-    if (net_parse_ipv4(args[1], &destination) != 0) {
-        vga_printf_colour(LIGHT_RED, BLACK,
-                          "ping: invalid IPv4 address: %s\n", args[1]);
-        return;
-    }
+    int is_ipv4 = net_parse_ipv4(args[1], &destination) == 0;
 
     net_interface_info_t info;
     net_get_interface(&info);
@@ -531,9 +532,17 @@ static void cmd_ping() {
         return;
     }
 
-    vga_printf("PING ");
+    if (!is_ipv4) {
+        if (net_resolve_ipv4(args[1], &destination) != 0) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "ping: could not resolve hostname: %s\n", args[1]);
+            return;
+        }
+    }
+
+    vga_printf("PING %s (", args[1]);
     print_ipv4(destination);
-    vga_printf(" (%s): 56 data bytes\n", args[1]);
+    vga_printf("): 56 data bytes\n");
 
     net_ping_result_t result;
     int status = net_ping_ipv4(destination, &result);
@@ -554,8 +563,9 @@ static void cmd_ping() {
     for (uint32_t i = 0; i < NET_PING_COUNT; i++) {
         if (!(result.reply_mask & (1u << i)))
             continue;
-        vga_printf("64 bytes from %s: icmp_seq=%u time=%u ms\n",
-                   args[1], i, result.rtt_ms[i]);
+        vga_printf("64 bytes from ");
+        print_ipv4(destination);
+        vga_printf(": icmp_seq=%u time=%u ms\n", i, result.rtt_ms[i]);
         total_ms += result.rtt_ms[i];
         if (result.rtt_ms[i] < min_ms)
             min_ms = result.rtt_ms[i];

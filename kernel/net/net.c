@@ -27,6 +27,10 @@
 #define DHCP_REQUEST  3
 #define DHCP_ACK      5
 
+// DNS Settings
+#define DNS_SERVER_PORT 53
+#define DNS_TIMEOUT_MS  4000
+
 typedef struct __attribute__((packed)) {
     uint8_t destination[6];
     uint8_t source[6];
@@ -156,7 +160,7 @@ static int send_dhcp_message(uint8_t message_type, uint32_t xid, uint32_t reques
 static int wait_dhcp_reply(uint8_t expected_type, uint32_t xid,
                            uint32_t expected_server, uint32_t *offered_ip,
                            uint32_t *netmask, uint32_t *gateway,
-                           uint32_t *server_ip) {
+                           uint32_t *dns_server, uint32_t *server_ip) {
     uint32_t start = pit_ticks();
 
     while ((uint32_t)(pit_ticks() - start) < DHCP_TIMEOUT_MS) {
@@ -174,7 +178,8 @@ static int wait_dhcp_reply(uint8_t expected_type, uint32_t xid,
             ip_header_length < IPV4_HEADER_SIZE ||
             ip[9] != 17 ||
             (read_be16(ip + 6) & 0x3FFF) != 0 ||
-            frame_length < ETHERNET_HEADER_SIZE + ip_header_length + 8)
+            (uint32_t)frame_length <
+                ETHERNET_HEADER_SIZE + ip_header_length + 8)
             continue;
 
         uint16_t ip_length = read_be16(ip + 2);
@@ -213,6 +218,7 @@ static int wait_dhcp_reply(uint8_t expected_type, uint32_t xid,
         uint32_t reply_netmask = 0;
         uint32_t reply_gateway = 0;
         uint32_t reply_server = 0;
+        uint32_t reply_dns = 0;
         uint32_t option_index = DHCP_FIXED_SIZE;
 
         while (option_index < bootp_length) {
@@ -237,7 +243,8 @@ static int wait_dhcp_reply(uint8_t expected_type, uint32_t xid,
                 reply_gateway = read_be32(value);
             else if (code == 54 && option_length == 4)
                 reply_server = read_be32(value);
-
+            else if (code == 6 && option_length >= 4)
+                reply_dns = read_be32(value);
             option_index += option_length;
         }
 
@@ -250,6 +257,7 @@ static int wait_dhcp_reply(uint8_t expected_type, uint32_t xid,
         *netmask = reply_netmask;
         *gateway = reply_gateway;
         *server_ip = reply_server;
+        *dns_server = reply_dns;
         return 0;
     }
 
@@ -266,12 +274,13 @@ static int dhcp_configure(void) {
         uint32_t netmask = 0;
         uint32_t gateway = 0;
         uint32_t server_ip = 0;
+        uint32_t dns_server = 0;
 
         if (send_dhcp_message(DHCP_DISCOVER, xid, 0, 0) != 0)
             continue;
 
         if (wait_dhcp_reply(DHCP_OFFER, xid, 0, &offered_ip,
-                            &netmask, &gateway, &server_ip) != 0 ||
+                            &netmask, &gateway, &dns_server, &server_ip) != 0 ||
             offered_ip == 0 || server_ip == 0)
             continue;
 
@@ -279,13 +288,14 @@ static int dhcp_configure(void) {
             continue;
 
         if (wait_dhcp_reply(DHCP_ACK, xid, server_ip, &offered_ip,
-                            &netmask, &gateway, &server_ip) != 0 ||
+                            &netmask, &gateway, &dns_server, &server_ip) != 0 ||
             offered_ip == 0 || netmask == 0)
             continue;
 
         interface_info.ip_address = offered_ip;
         interface_info.netmask = netmask;
         interface_info.gateway = gateway;
+        interface_info.dns_server = dns_server;
         return 0;
     }
 
@@ -438,6 +448,243 @@ static int resolve_mac(uint32_t target_ip, uint8_t *mac_out) {
     }
     arp_ip = 0;
     return -1;
+}
+
+static int dns_skip_name(const uint8_t *message, uint32_t length,
+                         uint32_t *offset) {
+    uint32_t cursor = *offset;
+    uint32_t resume = 0;
+    uint32_t steps = 0;
+
+    for (;;) {
+        if (cursor >= length || ++steps > length)
+            return -1;
+
+        uint8_t label_length = message[cursor];
+        if ((label_length & 0xC0) == 0xC0) {
+            if (cursor + 1 >= length)
+                return -1;
+
+            uint32_t pointer =
+                ((uint32_t)(label_length & 0x3F) << 8) | message[cursor + 1];
+            if (pointer >= length)
+                return -1;
+
+            if (!resume)
+                resume = cursor + 2;
+            cursor = pointer;
+            continue;
+        }
+
+        if (label_length & 0xC0)
+            return -1;
+
+        cursor++;
+        if (label_length == 0) {
+            *offset = resume ? resume : cursor;
+            return 0;
+        }
+
+        if (label_length > 63 || label_length > length - cursor)
+            return -1;
+
+        cursor += label_length;
+    }
+}
+
+int net_resolve_ipv4(const char *hostname, uint32_t *address) {
+    if (!hostname || !address || !interface_info.available ||
+        !interface_info.dns_server)
+        return -1;
+
+    uint32_t name_length = 0;
+    uint32_t label_length = 0;
+    const char *label = hostname;
+
+    for (const char *p = hostname; ; p++) {
+        if (*p == '.' || *p == '\0') {
+            if (label_length == 0 || label_length > 63 ||
+                *label == '-' || p[-1] == '-')
+                return -1;
+
+            name_length += label_length + 1;
+            if (name_length > 254)
+                return -1;
+
+            if (*p == '\0')
+                break;
+
+            label = p + 1;
+            label_length = 0;
+            continue;
+        }
+
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') ||
+              (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') ||
+              c == '-'))
+            return -1;
+
+        label_length++;
+        if (label_length > 63)
+            return -1;
+    }
+
+    uint32_t next_hop = route_ip(interface_info.dns_server);
+    uint8_t destination_mac[6];
+    if (resolve_mac(next_hop, destination_mac) != 0)
+        return -2;
+
+    memset(packet_buffer, 0, sizeof(packet_buffer));
+
+    ethernet_header_t *ethernet = (ethernet_header_t *)packet_buffer;
+    copy_mac(ethernet->destination, destination_mac);
+    copy_mac(ethernet->source, interface_info.mac);
+    ethernet->type = __builtin_bswap16(ETHERNET_TYPE_IPV4);
+
+    uint8_t *ip = packet_buffer + ETHERNET_HEADER_SIZE;
+    ip[0] = 0x45;
+    ip[8] = 64;
+    ip[9] = 17;
+    write_be32(ip + 12, interface_info.ip_address);
+    write_be32(ip + 16, interface_info.dns_server);
+
+    uint8_t *udp = ip + IPV4_HEADER_SIZE;
+    uint16_t identifier = next_identifier++;
+    uint16_t source_port = 49152 + (identifier & 0x3FFF);
+    write_be16(udp, source_port);
+    write_be16(udp + 2, DNS_SERVER_PORT);
+
+    uint8_t *dns = udp + 8;
+    write_be16(dns, identifier);
+    write_be16(dns + 2, 0x0100);
+    write_be16(dns + 4, 1);
+
+    uint8_t *qname = dns + 12;
+    uint32_t qname_length = 0;
+    label_length = 0;
+    label = hostname;
+
+    for (const char *p = hostname; ; p++) {
+        if (*p == '.' || *p == '\0') {
+            *qname++ = (uint8_t)label_length;
+            for (const char *c = label; c < p; c++)
+                *qname++ = (uint8_t)*c;
+            qname_length += label_length + 1;
+
+            if (*p == '\0')
+                break;
+
+            label = p + 1;
+            label_length = 0;
+            continue;
+        }
+
+        label_length++;
+    }
+
+    *qname++ = 0;
+    qname_length++;
+    write_be16(qname, 1);
+    write_be16(qname + 2, 1);
+    qname_length += 4;
+
+    uint16_t dns_length = 12 + qname_length;
+    uint16_t udp_length = 8 + dns_length;
+    uint16_t ip_length = IPV4_HEADER_SIZE + udp_length;
+    uint16_t frame_length = ETHERNET_HEADER_SIZE + ip_length;
+
+    write_be16(udp + 4, udp_length);
+    write_be16(ip + 2, ip_length);
+    write_be16(ip + 10, checksum(ip, IPV4_HEADER_SIZE));
+
+    if (e1000_send(packet_buffer, frame_length) != 0)
+        return -3;
+
+    uint32_t start = pit_ticks();
+    while ((uint32_t)(pit_ticks() - start) < DNS_TIMEOUT_MS) {
+        int frame_length_received =
+            e1000_receive(packet_buffer, sizeof(packet_buffer));
+        if (frame_length_received <
+            ETHERNET_HEADER_SIZE + IPV4_HEADER_SIZE + 8 + 12)
+            continue;
+
+        if (read_be16(packet_buffer + 12) != ETHERNET_TYPE_IPV4)
+            continue;
+
+        const uint8_t *reply_ip = packet_buffer + ETHERNET_HEADER_SIZE;
+        uint32_t ip_header_length = (reply_ip[0] & 0x0F) * 4;
+        if ((reply_ip[0] >> 4) != 4 ||
+            ip_header_length < IPV4_HEADER_SIZE ||
+            reply_ip[9] != 17 ||
+            (read_be16(reply_ip + 6) & 0x3FFF) != 0 ||
+            (uint32_t)frame_length_received <
+                ETHERNET_HEADER_SIZE + ip_header_length + 8)
+            continue;
+
+        uint16_t reply_ip_length = read_be16(reply_ip + 2);
+        if (reply_ip_length < ip_header_length + 8 ||
+            reply_ip_length >
+                frame_length_received - ETHERNET_HEADER_SIZE ||
+            checksum(reply_ip, ip_header_length) != 0 ||
+            read_be32(reply_ip + 12) != interface_info.dns_server ||
+            read_be32(reply_ip + 16) != interface_info.ip_address)
+            continue;
+
+        const uint8_t *reply_udp = reply_ip + ip_header_length;
+        uint16_t reply_udp_length = read_be16(reply_udp + 4);
+        if (read_be16(reply_udp) != DNS_SERVER_PORT ||
+            read_be16(reply_udp + 2) != source_port ||
+            reply_udp_length < 8 + 12 ||
+            reply_udp_length > reply_ip_length - ip_header_length)
+            continue;
+
+        const uint8_t *reply_dns = reply_udp + 8;
+        uint32_t reply_dns_length = reply_udp_length - 8;
+        uint16_t flags = read_be16(reply_dns + 2);
+        if (read_be16(reply_dns) != identifier ||
+            !(flags & 0x8000) ||
+            (flags & 0x7A00) != 0 ||
+            read_be16(reply_dns + 4) != 1)
+            continue;
+        if (flags & 0x000F)
+            return -4;
+
+        uint32_t cursor = 12;
+        if (dns_skip_name(reply_dns, reply_dns_length, &cursor) != 0 ||
+            cursor + 4 > reply_dns_length ||
+            read_be16(reply_dns + cursor) != 1 ||
+            read_be16(reply_dns + cursor + 2) != 1)
+            continue;
+        cursor += 4;
+
+        uint16_t answer_count = read_be16(reply_dns + 6);
+        for (uint32_t i = 0; i < answer_count; i++) {
+            if (dns_skip_name(reply_dns, reply_dns_length, &cursor) != 0 ||
+                cursor + 10 > reply_dns_length)
+                break;
+
+            uint16_t type = read_be16(reply_dns + cursor);
+            uint16_t class_code = read_be16(reply_dns + cursor + 2);
+            uint16_t data_length = read_be16(reply_dns + cursor + 8);
+            cursor += 10;
+
+            if (data_length > reply_dns_length - cursor)
+                break;
+
+            if (type == 1 && class_code == 1 && data_length == 4) {
+                *address = read_be32(reply_dns + cursor);
+                return 0;
+            }
+
+            cursor += data_length;
+        }
+
+        return -4;
+    }
+
+    return -4;
 }
 
 static int send_echo(uint32_t destination, const uint8_t *destination_mac,
