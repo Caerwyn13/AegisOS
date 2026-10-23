@@ -50,6 +50,8 @@ void vga_printf_colour(vga_colour_t fg, vga_colour_t bg, const char *fmt, ...);
 void vga_set_colour(vga_colour_t fg, vga_colour_t bg);
 void vga_update_cursor();
 int  vga_get_row();
+int  vga_get_column();
+void vga_set_cursor_position(int row, int column);
 
 // ------------------------
 // Graphics mode API

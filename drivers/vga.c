@@ -174,6 +174,18 @@ int vga_get_row() {
     return cursor_y;
 }
 
+int vga_get_column() {
+    return cursor_x;
+}
+
+void vga_set_cursor_position(int row, int column) {
+    if (current_mode != VGA_MODE_TEXT)
+        return;
+    cursor_y = row;
+    cursor_x = column;
+    vga_update_cursor();
+}
+
 void vga_putchar(char c) {
     if (current_mode != VGA_MODE_TEXT) return;
 

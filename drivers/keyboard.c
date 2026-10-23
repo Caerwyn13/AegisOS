@@ -62,6 +62,11 @@ static void keyboard_handler(registers_t *regs) {
         extended = 0;
         if (scancode == 0x48) { shell_handle_key(ARROW_UP);   return; }
         if (scancode == 0x50) { shell_handle_key(ARROW_DOWN); return; }
+        if (scancode == 0x4B) { shell_handle_key(ARROW_LEFT); return; }
+        if (scancode == 0x4D) { shell_handle_key(ARROW_RIGHT); return; }
+        if (scancode == 0x47) { shell_handle_key(KEY_HOME); return; }
+        if (scancode == 0x4F) { shell_handle_key(KEY_END); return; }
+        if (scancode == 0x53) { shell_handle_key(KEY_DELETE); return; }
         return;
     }
 

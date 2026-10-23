@@ -26,7 +26,7 @@ A simple x86 operating system written in C and NASM assembly.
 - ACPI shutdown and reboot support
 - Preemptive round-robin scheduling for kernel tasks
 - QEMU e1000 networking with DHCP, DNS lookups, IPv4 ping, and TCP connection tests
-- Interactive shell with command history and pagination
+- Interactive shell with editable command lines, arrow-key history, and pagination
 
 ## Shell Commands
 
@@ -60,6 +60,12 @@ A simple x86 operating system written in C and NASM assembly.
 | `shutdown` | Shutdown the system |
 
 Available colours for `clear -c`: `black`, `blue`, `green`, `cyan`, `red`, `magenta`, `brown`, `grey`, `darkgrey`, `lightblue`, `lightgreen`, `lightcyan`, `lightred`, `lightmagenta`, `yellow`, `white`
+
+Use the left and right arrow keys to move within the command line. Backspace
+removes the character before the cursor, Delete removes the character under
+the cursor, and Home/End move to the start or end. Up/Down cycle through the
+command history; pressing Down past the newest entry restores the line you were
+typing before browsing history.
 
 ## Rock-Paper-Scissors
 

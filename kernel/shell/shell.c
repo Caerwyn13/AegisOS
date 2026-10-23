@@ -30,14 +30,21 @@
 
 static multiboot_info_t *mbi_ptr      = 0;
 static char              buf[BUFFER_SIZE];
-static int               buf_pos      = 0;
+static uint32_t          buf_length;
+static uint32_t          buf_cursor;
+static uint32_t          rendered_length;
+static int               input_origin_row;
+static int               input_origin_column;
 static volatile uint32_t key_read_index;
 static volatile uint32_t key_write_index;
-static char key_queue[KEY_QUEUE_SIZE];
+static uint16_t key_queue[KEY_QUEUE_SIZE];
 
 static char history[HISTORY_SIZE][BUFFER_SIZE];
+static char history_draft[BUFFER_SIZE];
+static uint32_t history_draft_length;
 static int  history_count             = 0;
 static int  history_index             = -1;
+static int  history_browsing;
 
 static char *args[MAX_ARGS];
 static int   argc                     = 0;
@@ -81,6 +88,9 @@ static void print_prompt() {
     vga_printf_colour(LIGHT_GREEN, BLACK, "root@AegisOS");
     vga_printf_colour(WHITE,       BLACK, ":~$ ");
     vga_set_colour(WHITE, BLACK);
+    input_origin_row = vga_get_row();
+    input_origin_column = vga_get_column();
+    rendered_length = 0;
 }
 
 static void history_add(const char *cmd) {
@@ -93,6 +103,85 @@ static void history_add(const char *cmd) {
         strcpy(history[HISTORY_SIZE - 1], cmd);
     }
     history_index = history_count;
+    history_browsing = 0;
+}
+
+static void set_input_cursor(void) {
+    uint32_t position = (uint32_t)input_origin_column + buf_cursor;
+    int row = input_origin_row + position / VGA_TEXT_WIDTH;
+    int column = position % VGA_TEXT_WIDTH;
+    vga_set_cursor_position(row, column);
+}
+
+static void redraw_input_line(void) {
+    uint32_t output_length = buf_length > rendered_length
+                           ? buf_length : rendered_length;
+    vga_set_cursor_position(input_origin_row, input_origin_column);
+
+    for (uint32_t i = 0; i < buf_length; i++)
+        vga_putchar(buf[i]);
+    for (uint32_t i = buf_length; i < output_length; i++)
+        vga_putchar(' ');
+
+    uint32_t end_position = (uint32_t)input_origin_column + output_length;
+    int end_row = input_origin_row + end_position / VGA_TEXT_WIDTH;
+    if (end_row >= VGA_TEXT_HEIGHT) {
+        int scroll_rows = end_row - VGA_TEXT_HEIGHT + 1;
+        input_origin_row -= scroll_rows;
+        if (input_origin_row < 0)
+            input_origin_row = 0;
+    }
+
+    rendered_length = buf_length;
+    set_input_cursor();
+}
+
+static void load_history_line(const char *line) {
+    buf_length = strlen(line);
+    if (buf_length >= BUFFER_SIZE)
+        buf_length = BUFFER_SIZE - 1;
+    for (uint32_t i = 0; i < buf_length; i++)
+        buf[i] = line[i];
+    buf[buf_length] = '\0';
+    buf_cursor = buf_length;
+    redraw_input_line();
+}
+
+static void navigate_history(int direction) {
+    if (history_count == 0)
+        return;
+
+    if (!history_browsing) {
+        if (direction > 0)
+            return;
+        for (uint32_t i = 0; i < buf_length; i++)
+            history_draft[i] = buf[i];
+        history_draft[buf_length] = '\0';
+        history_draft_length = buf_length;
+        history_index = history_count;
+        history_browsing = 1;
+    }
+
+    if (direction < 0) {
+        if (history_index > 0)
+            history_index--;
+        load_history_line(history[history_index]);
+        return;
+    }
+
+    if (history_index < history_count - 1) {
+        history_index++;
+        load_history_line(history[history_index]);
+    } else {
+        history_index = history_count;
+        history_browsing = 0;
+        buf_length = history_draft_length;
+        for (uint32_t i = 0; i < buf_length; i++)
+            buf[i] = history_draft[i];
+        buf[buf_length] = '\0';
+        buf_cursor = buf_length;
+        redraw_input_line();
+    }
 }
 
 static void parse_args(char *cmd) {
@@ -922,60 +1011,83 @@ void shell_init(multiboot_info_t *mbi) {
     print_prompt();
 }
 
-static void process_key(char c) {
-    if (c == '\n') {
+static void process_key(uint16_t key) {
+    if (key == '\n') {
+        buf[buf_length] = '\0';
+        buf_cursor = buf_length;
+        redraw_input_line();
         vga_putchar('\n');
-        buf[buf_pos] = 0;
-        if (buf_pos > 0) {
+        if (buf_length > 0) {
             history_add(buf);
             execute(buf);
         }
-        buf_pos = 0;
+        buf_length = 0;
+        buf_cursor = 0;
+        rendered_length = 0;
+        buf[0] = '\0';
         history_index = history_count;
+        history_browsing = 0;
         print_prompt();
-    } else if (c == '\b') {
-        if (buf_pos > 0) {
-            buf_pos--;
-            vga_putchar('\b');
+    } else if (key == '\b') {
+        if (buf_cursor > 0) {
+            for (uint32_t i = buf_cursor - 1; i < buf_length - 1; i++)
+                buf[i] = buf[i + 1];
+            buf_length--;
+            buf_cursor--;
+            buf[buf_length] = '\0';
+            redraw_input_line();
         }
-    } else if (c == ARROW_UP) {
-        if (history_index > 0) {
-            history_index--;
-            while (buf_pos > 0) { buf_pos--; vga_putchar('\b'); }
-            strcpy(buf, history[history_index]);
-            buf_pos = strlen(buf);
-            vga_printf("%s", buf);
+    } else if (key == KEY_DELETE) {
+        if (buf_cursor < buf_length) {
+            for (uint32_t i = buf_cursor; i < buf_length - 1; i++)
+                buf[i] = buf[i + 1];
+            buf_length--;
+            buf[buf_length] = '\0';
+            redraw_input_line();
         }
-    } else if (c == ARROW_DOWN) {
-        if (history_index < history_count - 1) {
-            history_index++;
-            while (buf_pos > 0) { buf_pos--; vga_putchar('\b'); }
-            strcpy(buf, history[history_index]);
-            buf_pos = strlen(buf);
-            vga_printf("%s", buf);
-        } else {
-            while (buf_pos > 0) { buf_pos--; vga_putchar('\b'); }
-            history_index = history_count;
+    } else if (key == ARROW_UP) {
+        navigate_history(-1);
+    } else if (key == ARROW_DOWN) {
+        navigate_history(1);
+    } else if (key == ARROW_LEFT) {
+        if (buf_cursor > 0) {
+            buf_cursor--;
+            set_input_cursor();
         }
-    } else if (buf_pos < BUFFER_SIZE - 1) {
-        buf[buf_pos++] = c;
-        vga_putchar(c);
+    } else if (key == ARROW_RIGHT) {
+        if (buf_cursor < buf_length) {
+            buf_cursor++;
+            set_input_cursor();
+        }
+    } else if (key == KEY_HOME) {
+        buf_cursor = 0;
+        set_input_cursor();
+    } else if (key == KEY_END) {
+        buf_cursor = buf_length;
+        set_input_cursor();
+    } else if (key >= 32 && key <= 126 && buf_length < BUFFER_SIZE - 1) {
+        for (uint32_t i = buf_length; i > buf_cursor; i--)
+            buf[i] = buf[i - 1];
+        buf[buf_cursor++] = (char)key;
+        buf_length++;
+        buf[buf_length] = '\0';
+        redraw_input_line();
     }
 }
 
-void shell_handle_key(char c) {
+void shell_handle_key(uint16_t key) {
     uint32_t next = (key_write_index + 1) % KEY_QUEUE_SIZE;
     if (next == key_read_index)
         return;
 
-    key_queue[key_write_index] = c;
+    key_queue[key_write_index] = key;
     key_write_index = next;
 }
 
 void shell_process_input(void) {
     while (key_read_index != key_write_index) {
-        char c = key_queue[key_read_index];
+        uint16_t key = key_queue[key_read_index];
         key_read_index = (key_read_index + 1) % KEY_QUEUE_SIZE;
-        process_key(c);
+        process_key(key);
     }
 }
