@@ -55,6 +55,16 @@ A simple x86 operating system written in C and NASM assembly.
 
 Available colours for `clear -c`: `black`, `blue`, `green`, `cyan`, `red`, `magenta`, `brown`, `grey`, `darkgrey`, `lightblue`, `lightgreen`, `lightcyan`, `lightred`, `lightmagenta`, `yellow`, `white`
 
+## Rock-Paper-Scissors
+
+Play one round by choosing `rock`, `paper`, or `scissors`:
+
+```text
+rps rock
+```
+
+AegisOS shows both choices and the result. Run the command again to play another round.
+
 ## Syscall Interface
 
 Userspace programs communicate with the kernel via `int 0x80`. Set `eax` to the syscall number and arguments in `ebx`, `ecx`, `edx`.
