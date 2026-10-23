@@ -26,7 +26,8 @@ A simple x86 operating system written in C and NASM assembly.
 - ACPI shutdown and reboot support
 - Preemptive round-robin scheduling for kernel tasks
 - QEMU e1000 networking with DHCP, DNS lookups, IPv4 ping, and TCP connection tests
-- Interactive shell with editable command lines, arrow-key history, and pagination
+- Interactive shell with a colour-coded prompt and output, editable command lines,
+  arrow-key history, and paginated help
 
 ## Shell Commands
 
@@ -172,12 +173,16 @@ ld -m elf_i386 -nostdlib --no-dynamic-linker \
     -Ttext=0x400000 hello.o -o hello.elf
 ```
 
-Write to disk using the included `diskwrite` tool:
+Create the disk image if it does not already exist, make the included
+`diskwrite` tool executable, and write `hello.elf` to the image. Stop QEMU
+before writing to the image:
 ```bash
+make disk.img
+chmod +x tools/diskwrite
 ./tools/diskwrite disk.img hello.elf
 ```
 
-Then run in AegisOS:
+Start AegisOS with `make run`, then run the program in the shell:
 ```
 exec hello.elf
 ```

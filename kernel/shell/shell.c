@@ -87,12 +87,30 @@ static const char *help_lines[] = {
 // ============================================================
 
 static void print_prompt() {
-    vga_printf_colour(LIGHT_GREEN, BLACK, "root@AegisOS");
-    vga_printf_colour(WHITE,       BLACK, ":~$ ");
+    vga_printf_colour(LIGHT_GREEN, BLACK, "root");
+    vga_printf_colour(DARK_GREY, BLACK, "@");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "AegisOS");
+    vga_printf_colour(DARK_GREY, BLACK, ":");
+    vga_printf_colour(LIGHT_BLUE, BLACK, "~");
+    vga_printf_colour(WHITE, BLACK, "$ ");
     vga_set_colour(WHITE, BLACK);
     input_origin_row = vga_get_row();
     input_origin_column = vga_get_column();
     rendered_length = 0;
+}
+
+static void print_section(const char *title) {
+    vga_printf_colour(LIGHT_CYAN, BLACK, "\n== %s ==\n", title);
+}
+
+static void print_success(const char *message) {
+    vga_printf_colour(LIGHT_GREEN, BLACK, "[OK] ");
+    vga_printf("%s\n", message);
+}
+
+static void print_info(const char *message) {
+    vga_printf_colour(LIGHT_BLUE, BLACK, "[>] ");
+    vga_printf("%s\n", message);
 }
 
 static void history_add(const char *cmd) {
@@ -317,14 +335,17 @@ static void cmd_cat() {
         return;
     }
     uint8_t *buf = (uint8_t *)kmalloc(FS_MAX_SIZE);
-    if (!buf) { vga_printf("Out of memory\n"); return; }
+    if (!buf) {
+        vga_printf_colour(LIGHT_RED, BLACK, "cat: out of memory\n");
+        return;
+    }
 
     uint32_t size = 0;
     if (fs_read(args[1], buf, &size) < 0) {
-        vga_printf_colour(LIGHT_RED, BLACK, "File not found: %s\n", args[1]);
+        vga_printf_colour(LIGHT_RED, BLACK, "cat: file not found: %s\n", args[1]);
     } else {
         buf[size] = 0;
-        vga_printf("%s\n", (char *)buf);
+        vga_printf_colour(LIGHT_GREY, BLACK, "%s\n", (char *)buf);
     }
     kfree(buf);
 }
@@ -343,9 +364,11 @@ static void cmd_write() {
         if (i < argc - 1) strcat(buf, " ");
     }
     if (fs_write(args[1], (uint8_t *)buf, strlen(buf)) < 0)
-        vga_printf_colour(LIGHT_RED, BLACK, "Failed to write file\n");
-    else
-        vga_printf("Written %u bytes to %s\n", strlen(buf), args[1]);
+        vga_printf_colour(LIGHT_RED, BLACK, "write: failed to write %s\n", args[1]);
+    else {
+        vga_printf_colour(LIGHT_GREEN, BLACK, "[OK] ");
+        vga_printf("Wrote %u bytes to %s\n", strlen(buf), args[1]);
+    }
 }
 
 static void cmd_exec() {
@@ -360,8 +383,9 @@ static void cmd_exec() {
         return;
     }
 
-    vga_printf("Entry Point: 0x%x\n", entry);
-    vga_printf("Starting usermode...\n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "Entry point: ");
+    vga_printf_colour(LIGHT_GREEN, BLACK, "0x%x\n", entry);
+    print_info("Starting user mode");
     
     enter_usermode(entry, USER_STACK_TOP);
     paging_unmap_range(0x00400000, 0x00410000);
@@ -373,10 +397,12 @@ static void cmd_rm() {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: rm <file>\n");
         return;
     }
-    if (fs_delete(args[1]) < 0)
+    if (fs_delete(args[1]) < 0) {
         vga_printf_colour(LIGHT_RED, BLACK, "File not found: %s\n", args[1]);
-    else
+    } else {
+        vga_printf_colour(LIGHT_GREEN, BLACK, "[OK] ");
         vga_printf("Deleted %s\n", args[1]);
+    }
 }
 
 static void cmd_touch() {
@@ -384,10 +410,12 @@ static void cmd_touch() {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: touch <file>\n");
         return;
     }
-    if (fs_create(args[1]) < 0)
+    if (fs_create(args[1]) < 0) {
         vga_printf_colour(LIGHT_RED, BLACK, "Could not create file: %s\n", args[1]);
-    else
+    } else {
+        vga_printf_colour(LIGHT_GREEN, BLACK, "[OK] ");
         vga_printf("Created %s\n", args[1]);
+    }
 }
 
 static void cmd_help() {
@@ -409,14 +437,16 @@ static void cmd_help() {
     int end   = start + HELP_PAGE_SIZE;
     if (end > total) end = total;
 
-    vga_printf_colour(YELLOW, BLACK, "Available commands (page %d/%d):\n", page, total_pages);
+    print_section("COMMANDS");
+    vga_printf_colour(YELLOW, BLACK, "Page %d of %d\n", page, total_pages);
 
     int i;
     for (i = start; i < end; i++)
-        vga_printf("%s\n", help_lines[i]);
+        vga_printf_colour(LIGHT_GREY, BLACK, "%s\n", help_lines[i]);
 
     if (total_pages > 1)
-        vga_printf_colour(DARK_GREY, BLACK, "\nUse 'help -p <page>' to see more.\n");
+        vga_printf_colour(DARK_GREY, BLACK,
+                          "\nUse 'help -p <page>' to see another page.\n");
 }
 
 
@@ -439,7 +469,9 @@ static void cmd_echo() {
 }
 
 static void cmd_mem() {
-    vga_printf("Free memory: %u KB\n", pmm_free_pages() * 4);
+    print_section("MEMORY");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "Free: ");
+    vga_printf_colour(LIGHT_GREEN, BLACK, "%u KB\n", pmm_free_pages() * 4);
 }
 
 static void cmd_memmap() {
@@ -474,13 +506,16 @@ static void cmd_uptime() {
     uint32_t hours   = minutes / 60;
     seconds %= 60;
     minutes %= 60;
-    vga_printf("Uptime: %uh %um %us\n", hours, minutes, seconds);
+    print_section("UPTIME");
+    vga_printf_colour(WHITE, BLACK, "%uh %um %us\n", hours, minutes, seconds);
 }
 
 static void cmd_date() {
     rtc_time_t t = rtc_get_time();
-    vga_printf("%02u/%02u/%u %02u:%02u:%02u\n",
-        t.day, t.month, t.year,
+    print_section("DATE / TIME");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "%02u/%02u/%u ",
+        t.day, t.month, t.year);
+    vga_printf_colour(WHITE, BLACK, "%02u:%02u:%02u\n",
         t.hour, t.minute, t.second);
 }
 
@@ -505,9 +540,14 @@ static void cmd_hexdump() {
 }
 
 static void cmd_history() {
+    print_section("COMMAND HISTORY");
     int i;
-    for (i = 0; i < history_count; i++)
-        vga_printf("%d  %s\n", i + 1, history[i]);
+    for (i = 0; i < history_count; i++) {
+        vga_printf_colour(DARK_GREY, BLACK, "%2d  ", i + 1);
+        vga_printf_colour(LIGHT_GREY, BLACK, "%s\n", history[i]);
+    }
+    if (!history_count)
+        vga_printf_colour(DARK_GREY, BLACK, "No commands yet.\n");
 }
 
 static void cmd_rps() {
@@ -608,7 +648,10 @@ static void cmd_net() {
         return;
     }
 
-    vga_printf("Interface: e1000\nMAC: ");
+    print_section("NETWORK");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "Interface  ");
+    vga_printf_colour(LIGHT_GREEN, BLACK, "e1000\n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "MAC        ");
     for (uint32_t i = 0; i < sizeof(info.mac); i++) {
         if (i)
             vga_putchar(':');
@@ -616,17 +659,22 @@ static void cmd_net() {
             vga_putchar('0');
         vga_printf("%x", info.mac[i]);
     }
-    vga_printf("\nIPv4: ");
+    vga_printf("\n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "IPv4       ");
+    vga_set_colour(WHITE, BLACK);
     print_ipv4(info.ip_address);
-    vga_printf("\nNetmask: ");
+    vga_printf("\n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "Netmask    ");
     print_ipv4(info.netmask);
-    vga_printf("\nGateway: ");
+    vga_printf("\n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "Gateway    ");
     print_ipv4(info.gateway);
-    vga_printf("\nDNS: ");
+    vga_printf("\n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "DNS        ");
     if (info.dns_server)
         print_ipv4(info.dns_server);
     else
-        vga_printf("not provided by DHCP");
+        vga_printf_colour(YELLOW, BLACK, "not provided by DHCP");
     vga_putchar('\n');
 }
 
@@ -655,9 +703,10 @@ static void cmd_ping() {
         }
     }
 
-    vga_printf("PING %s (", args[1]);
+    print_section("PING");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "%s ", args[1]);
     print_ipv4(destination);
-    vga_printf("): 56 data bytes\n");
+    vga_printf("\n");
 
     net_ping_result_t result;
     int status = net_ping_ipv4(destination, &result);
@@ -678,9 +727,10 @@ static void cmd_ping() {
     for (uint32_t i = 0; i < NET_PING_COUNT; i++) {
         if (!(result.reply_mask & (1u << i)))
             continue;
-        vga_printf("64 bytes from ");
+        vga_printf_colour(LIGHT_GREEN, BLACK, "64 bytes from ");
         print_ipv4(destination);
-        vga_printf(": icmp_seq=%u time=%u ms\n", i, result.rtt_ms[i]);
+        vga_printf_colour(LIGHT_GREY, BLACK,
+                          ": icmp_seq=%u time=%u ms\n", i, result.rtt_ms[i]);
         total_ms += result.rtt_ms[i];
         if (result.rtt_ms[i] < min_ms)
             min_ms = result.rtt_ms[i];
@@ -688,10 +738,19 @@ static void cmd_ping() {
             max_ms = result.rtt_ms[i];
     }
 
-    vga_printf("\n--- ");
+    vga_printf_colour(DARK_GREY, BLACK, "\n--- ");
     print_ipv4(destination);
-    vga_printf(" ping statistics ---\n%u packets transmitted, %u received, %u%% packet loss\n",
-               NET_PING_COUNT, result.received,
+    vga_printf(" ping statistics ---\n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "%u transmitted, ",
+               NET_PING_COUNT);
+    if (result.received)
+        vga_printf_colour(LIGHT_GREEN, BLACK, "%u received, ",
+                          result.received);
+    else
+        vga_printf_colour(LIGHT_RED, BLACK, "%u received, ",
+                          result.received);
+    vga_printf_colour(result.received == NET_PING_COUNT ? LIGHT_GREEN : YELLOW,
+                      BLACK, "%u%% packet loss\n",
                ((NET_PING_COUNT - result.received) * 100) / NET_PING_COUNT);
     if (result.received)
         vga_printf("rtt min/avg/max = %u/%u/%u ms\n",
@@ -728,13 +787,14 @@ static void cmd_tcp() {
         return;
     }
 
-    vga_printf("TCP connect to %s (", args[1]);
+    print_section("TCP CONNECTION");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "%s ", args[1]);
     print_ipv4(destination);
-    vga_printf("):%u\n", port);
+    vga_printf(":%u\n", port);
 
     int status = net_tcp_connect_close(destination, port);
     if (status == 0) {
-        vga_printf("Connection established and closed cleanly.\n");
+        print_success("Connection established and closed cleanly");
     } else if (status == -2) {
         vga_printf_colour(LIGHT_RED, BLACK,
                           "tcp: could not reach destination (ARP timeout)\n");
@@ -980,7 +1040,9 @@ static void cmd_http() {
     static char response[HTTP_RESPONSE_CAPACITY];
     uint32_t response_length = 0;
     uint8_t truncated = 0;
-    vga_printf("GET http://%s%s (", args[1], path);
+    print_section("HTTP REQUEST");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "GET ");
+    vga_printf_colour(WHITE, BLACK, "http://%s%s (", args[1], path);
     print_ipv4(destination);
     vga_printf(")\n");
 
@@ -998,10 +1060,14 @@ static void cmd_http() {
         has_response_status =
             http_response_status(response, response_length,
                                  &response_status) == 0;
-        if (has_response_status)
-            vga_printf("HTTP status: %u\n", response_status);
-        else
-            vga_printf("HTTP status: unavailable\n");
+        if (has_response_status) {
+            vga_printf_colour(LIGHT_CYAN, BLACK, "HTTP status ");
+            vga_printf_colour(response_status >= 200 && response_status < 300
+                                  ? LIGHT_GREEN : YELLOW,
+                              BLACK, "%u\n", response_status);
+        } else {
+            vga_printf_colour(YELLOW, BLACK, "HTTP status unavailable\n");
+        }
 
         if (parsed_body_offset >= 0) {
             body_offset = (uint32_t)parsed_body_offset;
@@ -1025,9 +1091,9 @@ static void cmd_http() {
                 uint32_t display_length = body_length;
                 if (display_length > HTTP_DISPLAY_CAPACITY)
                     display_length = HTTP_DISPLAY_CAPACITY;
-                vga_printf("--- response body%s ---\n",
-                           truncated || display_length < body_length
-                               ? " (display limited)" : "");
+                vga_printf_colour(LIGHT_CYAN, BLACK, "\n--- response body%s ---\n",
+                                  truncated || display_length < body_length
+                                      ? " (display limited)" : "");
                 http_print_text(body, display_length);
             }
         } else {
@@ -1041,7 +1107,7 @@ static void cmd_http() {
     }
 
     if (status == 0) {
-        vga_printf("HTTP connection closed cleanly.\n");
+        print_success("HTTP connection closed cleanly");
         if (argc == 4) {
             if (!body || body_offset == 0 || !has_response_status) {
                 vga_printf_colour(LIGHT_RED, BLACK,
@@ -1062,6 +1128,7 @@ static void cmd_http() {
                 vga_printf_colour(LIGHT_RED, BLACK,
                                   "http: failed to save %s\n", args[3]);
             } else {
+                vga_printf_colour(LIGHT_GREEN, BLACK, "[OK] ");
                 vga_printf("Saved %u bytes to %s\n", body_length, args[3]);
             }
         }
@@ -1084,7 +1151,7 @@ static void cmd_http() {
 }
 
 static void cmd_about() {
-    vga_printf_colour(LIGHT_CYAN, BLACK, "========== ABOUT AegisOS ==========\n");
+    print_section("ABOUT AEGISOS");
     vga_printf("A simple x86 OS written solely by ");
     vga_printf_colour(YELLOW, BLACK, "Caerwyn Sabin-Rees\n");
     vga_printf("This OS began as a simple creative project\n");
