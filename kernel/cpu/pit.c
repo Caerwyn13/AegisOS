@@ -9,7 +9,7 @@
 static volatile uint32_t ticks = 0;
 static uint32_t frequency      = 0;
 
-// Callback for PIT events (can be set by other modules, e.g., Snake)
+// Callback for PIT events.
 static void (*pit_callback)(void) = 0;
 
 static void pit_handler(registers_t *regs) {

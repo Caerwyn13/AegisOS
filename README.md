@@ -35,6 +35,7 @@ A simple x86 operating system written in C and NASM assembly.
 | `clear` | Clear the screen |
 | `clear -c <colour>` | Clear with a background colour |
 | `echo <text>` | Print text to the screen |
+| `rps <choice>` | Play rock-paper-scissors (`rock`, `paper`, or `scissors`) against AegisOS |
 | `mem` | Show free memory in KB |
 | `memmap` | Show the GRUB memory map |
 | `uptime` | Show system uptime |

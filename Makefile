@@ -4,7 +4,7 @@ CD  := gcc
 LD  := ld
 
 ASMFLAGS := -f elf32
-CIMPS    := -Iinclude -Idrivers -Iports -Ikernel/acpi -Ikernel/cpu -Ikernel/mm -Ikernel/shell -Ikernel/lib -Ikernel/fs -Ikernel/games/snake
+CIMPS    := -Iinclude -Idrivers -Iports -Ikernel/acpi -Ikernel/cpu -Ikernel/mm -Ikernel/shell -Ikernel/lib -Ikernel/fs
 CFLAGS   := -m32 -ffreestanding -fno-stack-protector -nostdlib -nodefaultlibs -Wall -Wextra ${CIMPS}
 ifeq ($(ACPI_TEST_NO_STORAGE),1)
 CFLAGS   += -DACPI_TEST_NO_STORAGE

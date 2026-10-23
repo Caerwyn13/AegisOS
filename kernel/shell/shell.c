@@ -14,8 +14,6 @@
 #include "usermode.h"
 #include "acpi.h"
 
-#include "snake.h"
-
 #define BUFFER_SIZE     256
 #define HISTORY_SIZE    10
 #define MAX_ARGS        8
@@ -41,7 +39,7 @@ static const char *help_lines[] = {
     "  clear                  - clear the screen",
     "  clear -c <colour>      - clear with background colour",
     "  echo <text>            - print text",
-    "  snake                  - play snake",
+    "  rps <choice>           - play rock-paper-scissors",
     "  mem                    - show free memory",
     "  memmap                 - show memory map",
     "  heap                   - shows the heap",
@@ -407,14 +405,34 @@ static void cmd_history() {
         vga_printf("%d  %s\n", i + 1, history[i]);
 }
 
-static void cmd_snake() {
-    vga_clear();        // clear screen
-    snake_init();       // initialize game
+static void cmd_rps() {
+    static const char *choices[] = {"rock", "paper", "scissors"};
 
-    // Set up PIT timer to call snake_update automatically
-    pit_set_callback(snake_update);
+    if (argc != 2) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Usage: rps <rock|paper|scissors>\n");
+        return;
+    }
 
-    vga_printf_colour(LIGHT_CYAN, BLACK, "Use arrow keys to move. Press Ctrl+C to exit.\n");
+    int player;
+    if      (strcmp(args[1], "rock") == 0)     player = 0;
+    else if (strcmp(args[1], "paper") == 0)    player = 1;
+    else if (strcmp(args[1], "scissors") == 0) player = 2;
+    else {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Choose rock, paper, or scissors\n");
+        return;
+    }
+
+    int computer = pit_ticks() % 3;
+    vga_printf("You: %s | AegisOS: %s\n", choices[player], choices[computer]);
+
+    if (player == computer)
+        vga_printf_colour(YELLOW, BLACK, "It's a tie!\n");
+    else if ((player + 1) % 3 == computer)
+        vga_printf_colour(LIGHT_RED, BLACK, "AegisOS wins!\n");
+    else
+        vga_printf_colour(LIGHT_GREEN, BLACK, "You win!\n");
 }
 
 static void cmd_about() {
@@ -510,7 +528,7 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "rm")       == 0) cmd_rm();
     else if (strcmp(args[0], "touch")    == 0) cmd_touch();
     else if (strcmp(args[0], "exec")     == 0) cmd_exec();
-    else if (strcmp(args[0], "snake")    == 0) cmd_snake();
+    else if (strcmp(args[0], "rps")      == 0) cmd_rps();
 
     else if (strcmp(args[0], "atatest")     == 0) _cmd_atatest();
     else if (strcmp(args[0], "inodetest")   == 0) _cmd_inodetest();
