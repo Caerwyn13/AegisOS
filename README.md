@@ -23,6 +23,7 @@ A simple x86 operating system written in C and NASM assembly.
 - AegisFS — a custom filesystem with persistent file storage
 - ELF binary loader — load and execute ELF programs from disk
 - Syscall interface (`int 0x80`) for userspace programs
+- ACPI shutdown and reboot support
 - Interactive shell with command history and pagination
 
 ## Shell Commands
@@ -221,6 +222,8 @@ qemu-system-i386 -cdrom AegisOS.iso -serial mon:stdio -monitor telnet:localhost:
 
 ### Running on VirtualBox
 
+> **Warning:** AegisOS has been tested in QEMU, but has not been tested in VirtualBox. It may not boot or work correctly there.
+
 1. Open VirtualBox and create a new VM:
    - **Type**: Other
    - **Version**: Other/Unknown (32-bit)
@@ -230,6 +233,8 @@ qemu-system-i386 -cdrom AegisOS.iso -serial mon:stdio -monitor telnet:localhost:
 4. Boot the VM — AegisOS should load automatically
 
 ### Running on Real Hardware
+
+> **Warning:** AegisOS has not been tested on real hardware. Booting or using it on a physical machine may fail or behave unexpectedly.
 
 You can write the ISO to a USB drive and boot from it on real hardware:
 

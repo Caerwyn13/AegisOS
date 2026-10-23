@@ -7,7 +7,7 @@
 static uint8_t bitmap[MAX_PAGES / 8];
 static uint32_t total_pages = 0;
 static uint32_t free_pages = 0;
-static uint32_t max_page = 0;     // NEW: highest valid page based on multiboot
+static uint32_t max_page = 0;     // Highest valid page from the Multiboot memory map
 
 extern uint32_t kernel_end;
 
@@ -75,7 +75,7 @@ void pmm_init(multiboot_info_t* mbi) {
     for (uint32_t i = 0; i < kernel_pages; i++)
         pmm_set_used(i * PAGE_SIZE);
 
-    // 4. Reserve page 0 (common practice)
+    // 4. Reserve page 0
     bitmap_set(0);
 
     vga_printf("PMM: %u free pages (%u MB)\n", free_pages, (free_pages * 4) / 1024);

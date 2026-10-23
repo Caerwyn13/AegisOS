@@ -12,6 +12,7 @@
 #include "ata.h"
 #include "elf.h"
 #include "usermode.h"
+#include "acpi.h"
 
 #include "snake.h"
 
@@ -137,7 +138,6 @@ static uint32_t parse_int(const char *str) {
 void shell_after_exec() {
     vga_printf("Process exited\n");
     print_prompt();
-    // shell loop will continue naturally
 }
 
 // ============================================================
@@ -412,7 +412,6 @@ static void cmd_snake() {
     snake_init();       // initialize game
 
     // Set up PIT timer to call snake_update automatically
-    // We'll assume PIT callback registration exists:
     pit_set_callback(snake_update);
 
     vga_printf_colour(LIGHT_CYAN, BLACK, "Use arrow keys to move. Press Ctrl+C to exit.\n");
@@ -427,18 +426,61 @@ static void cmd_about() {
 }
 
 static void cmd_shutdown() {
-    //TODO: Fix this to work on real hardware
-    // At the moment it only works for QEMU, not VMs or actual hardware
-    outw(0x604, 0x2000);
+    vga_printf("Requesting ACPI shutdown...\n");
+    int result = acpi_shutdown();
+
+    if (result == ACPI_REQUEST_ISSUED) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "ACPI shutdown request was ignored by the system\n");
+        return;
+    }
+
+    switch (result) {
+        case ACPI_ERR_RSDP:
+            vga_printf_colour(LIGHT_RED, BLACK, "ACPI root pointer not found or unsupported\n");
+            break;
+        case ACPI_ERR_RSDT:
+            vga_printf_colour(LIGHT_RED, BLACK, "ACPI root table is invalid\n");
+            break;
+        case ACPI_ERR_FADT:
+            vga_printf_colour(LIGHT_RED, BLACK, "ACPI FADT not found or unsupported\n");
+            break;
+        case ACPI_ERR_DSDT:
+            vga_printf_colour(LIGHT_RED, BLACK, "ACPI DSDT is invalid\n");
+            break;
+        case ACPI_ERR_S5:
+            vga_printf_colour(LIGHT_RED, BLACK, "ACPI S5 sleep state not found\n");
+            break;
+        case ACPI_ERR_PM1:
+            vga_printf_colour(LIGHT_RED, BLACK, "ACPI PM1 control register is unsupported\n");
+            break;
+        case ACPI_ERR_ENABLE:
+            vga_printf_colour(LIGHT_RED, BLACK, "Could not enable ACPI mode\n");
+            break;
+        default:
+            vga_printf_colour(LIGHT_RED, BLACK, "Unknown ACPI shutdown error: %d\n", result);
+            break;
+    }
 }
 
 static void cmd_reboot() {
-    vga_printf("Rebooting...\n");
-    uint8_t val = 0;
-    while (val & 0x02)
-        val = inb(0x64);
-    outb(0x64, 0xFE); //TODO: FIX FOR VMs AND REAL HARDWARE
-    while(1);
+    vga_printf("Requesting ACPI reboot...\n");
+    int result = acpi_reboot();
+
+    if (result != ACPI_REQUEST_ISSUED)
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "ACPI reset unavailable (error %d); trying keyboard controller\n",
+                          result);
+
+    for (uint32_t timeout = 1000000; timeout; timeout--) {
+        if (!(inb(0x64) & 0x02)) {
+            outb(0x64, 0xFE);
+            break;
+        }
+    }
+
+    for (;;)
+        __asm__ volatile ("hlt");
 }
 
 // ============================================================
@@ -484,12 +526,10 @@ static void execute(char *cmd) {
 
 void shell_init(multiboot_info_t *mbi) {
     mbi_ptr = mbi;
-    //vga_clear();
-    //TODO: FIX DISPLAY
     vga_printf_colour(LIGHT_CYAN, BLACK, "   _            _     ___  ___  \n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, "  /_\  ___ __ _(_)___/ _ \/ __| \n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, " / _ \/ -_) _` | (_-< (_) \__ \ \n");
-    vga_printf_colour(LIGHT_CYAN, BLACK, "/_/ \_\___\__, |_/__/\___/|___/ \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "  /_\\  ___ __ _(_)___/ _ \\/ __| \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, " / _ \\/ -_) _` | (_-< (_) \\__ \\ \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "/_/ \\_\\___\\__, |_/__/\\___/|___/ \n");
     vga_printf_colour(LIGHT_CYAN, BLACK, "          |___/                 \n");      
     vga_printf("\n");
     vga_printf_colour(YELLOW,     BLACK, "  Welcome to AegisOS!\n");

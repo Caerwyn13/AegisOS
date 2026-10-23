@@ -27,7 +27,6 @@ void snake_init() {
 // Place food safely within bounds
 // ---------------------------------------------------
 void place_food() {
-    // Fixed values for now (no rand)
     food.x = (184739503 % (VGA_13H_WIDTH / SNAKE_SIZE)) * SNAKE_SIZE;
     food.y = (403928425 % (VGA_13H_HEIGHT / SNAKE_SIZE)) * SNAKE_SIZE;
 }

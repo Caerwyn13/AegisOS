@@ -37,10 +37,14 @@ void kernel_main(multiboot_info_t *mbi) {
     tss_set_kernel_stack(kernel_stack_top);
     heap_init();
     __asm__ volatile ("sti");
+#ifndef ACPI_TEST_NO_STORAGE
     pit_sleep(500);   
     ata_init();
     pit_sleep(500);   
     fs_init();
+#else
+    vga_printf("ACPI test build: ATA storage disabled\n");
+#endif
     syscall_init();
     vga_clear();
     shell_init(mbi);

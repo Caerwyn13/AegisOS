@@ -96,9 +96,6 @@ int paging_map_user_range(uint32_t virt_start, uint32_t virt_end, int writable) 
         uint32_t phys = (uint32_t)pmm_alloc();
         if (!phys) return -1;
 
-        // Temporarily make all pages readable
-        // I hate memory management
-        //uint32_t flags = PAGE_PRESENT | PAGE_USER | (writable ? PAGE_RW : 0);
         uint32_t flags = PAGE_PRESENT | PAGE_USER | PAGE_RW;
         paging_map(v, phys, flags);
     }

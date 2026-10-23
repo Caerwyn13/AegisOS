@@ -4,8 +4,11 @@ CD  := gcc
 LD  := ld
 
 ASMFLAGS := -f elf32
-CIMPS    := -Iinclude -Idrivers -Iports -Ikernel/cpu -Ikernel/mm -Ikernel/shell -Ikernel/lib -Ikernel/fs -Ikernel/games/snake
+CIMPS    := -Iinclude -Idrivers -Iports -Ikernel/acpi -Ikernel/cpu -Ikernel/mm -Ikernel/shell -Ikernel/lib -Ikernel/fs -Ikernel/games/snake
 CFLAGS   := -m32 -ffreestanding -fno-stack-protector -nostdlib -nodefaultlibs -Wall -Wextra ${CIMPS}
+ifeq ($(ACPI_TEST_NO_STORAGE),1)
+CFLAGS   += -DACPI_TEST_NO_STORAGE
+endif
 LDFLAGS  := -m elf_i386 -T linker.ld
 
 SRC_DIR := kernel
