@@ -22,7 +22,8 @@
 #define MAX_ARGS        8
 #define HELP_PAGE_SIZE  8
 #define KEY_QUEUE_SIZE  128
-#define HTTP_RESPONSE_CAPACITY 1024
+#define HTTP_RESPONSE_CAPACITY (FS_MAX_SIZE + 4096)
+#define HTTP_DISPLAY_CAPACITY 1023
 #define HTTP_PATH_MAX_LENGTH 200
 // ============================================================
 // State
@@ -61,6 +62,7 @@ static const char *help_lines[] = {
     "  ping <IPv4|hostname>   - ping an IPv4 address or hostname",
     "  tcp <IPv4|hostname> <port> - test and close a TCP connection",
     "  http <IPv4|hostname> [path] - fetch an HTTP path",
+    "  http <IPv4|hostname> <path> <file> - download an HTTP body",
     "  mem                    - show free memory",
     "  memmap                 - show memory map",
     "  heap                   - shows the heap",
@@ -751,7 +753,7 @@ static void cmd_tcp() {
     }
 }
 
-static int http_response_body_offset(const char *response, uint16_t length) {
+static int http_response_body_offset(const char *response, uint32_t length) {
     for (uint32_t i = 0; i + 3 < length; i++) {
         if (response[i] == '\r' && response[i + 1] == '\n' &&
             response[i + 2] == '\r' && response[i + 3] == '\n')
@@ -760,7 +762,7 @@ static int http_response_body_offset(const char *response, uint16_t length) {
     return -1;
 }
 
-static int http_response_status(const char *response, uint16_t length,
+static int http_response_status(const char *response, uint32_t length,
                                 uint16_t *status_code) {
     if (length < 12 || response[0] != 'H' || response[1] != 'T' ||
         response[2] != 'T' || response[3] != 'P' || response[4] != '/')
@@ -783,7 +785,7 @@ static int http_response_status(const char *response, uint16_t length,
     return 0;
 }
 
-static void http_print_text(const char *text, uint16_t length) {
+static void http_print_text(const char *text, uint32_t length) {
     for (uint32_t i = 0; i < length; i++) {
         char c = text[i];
         if (c == '\r')
@@ -797,14 +799,138 @@ static void http_print_text(const char *text, uint16_t length) {
         vga_putchar('\n');
 }
 
+static char http_lowercase(char c) {
+    return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
+}
+
+static int http_response_is_chunked(const char *response, uint32_t body_offset) {
+    uint32_t line = 0;
+    while (line + 1 < body_offset) {
+        uint32_t end = line;
+        while (end + 1 < body_offset &&
+               !(response[end] == '\r' && response[end + 1] == '\n'))
+            end++;
+        if (end == line)
+            break;
+
+        static const char field[] = "transfer-encoding:";
+        uint32_t field_length = sizeof(field) - 1;
+        if (end - line >= field_length) {
+            uint32_t i = 0;
+            while (i < field_length &&
+                   http_lowercase(response[line + i]) == field[i])
+                i++;
+            if (i == field_length) {
+                for (uint32_t value = line + field_length; value < end; value++) {
+                    static const char chunked[] = "chunked";
+                    uint32_t j = 0;
+                    while (j < sizeof(chunked) - 1 &&
+                           value + j < end &&
+                           http_lowercase(response[value + j]) == chunked[j])
+                        j++;
+                    if (j == sizeof(chunked) - 1)
+                        return 1;
+                }
+            }
+        }
+        line = end + 2;
+    }
+    return 0;
+}
+
+static int http_decode_chunked(char *response, uint32_t body_offset,
+                               uint32_t response_length,
+                               uint32_t *decoded_length) {
+    uint32_t input = body_offset;
+    uint32_t output = 0;
+
+    while (input < response_length) {
+        uint32_t chunk_size = 0;
+        uint32_t digits = 0;
+        while (input < response_length && response[input] != '\r' &&
+               response[input] != ';') {
+            char c = response[input++];
+            uint32_t digit;
+            if (c >= '0' && c <= '9')
+                digit = c - '0';
+            else if (http_lowercase(c) >= 'a' && http_lowercase(c) <= 'f')
+                digit = http_lowercase(c) - 'a' + 10;
+            else
+                return -1;
+            if (chunk_size > (FS_MAX_SIZE - digit) / 16)
+                return -2;
+            chunk_size = chunk_size * 16 + digit;
+            digits++;
+        }
+        if (!digits)
+            return -1;
+
+        while (input < response_length && response[input] == ';') {
+            while (input < response_length && response[input] != '\r')
+                input++;
+        }
+        if (input + 1 >= response_length ||
+            response[input] != '\r' || response[input + 1] != '\n')
+            return -1;
+        input += 2;
+
+        if (chunk_size == 0) {
+            while (input + 1 < response_length) {
+                if (response[input] == '\r' && response[input + 1] == '\n') {
+                    *decoded_length = output;
+                    return 0;
+                }
+                uint32_t trailer_end = input;
+                while (trailer_end + 1 < response_length &&
+                       !(response[trailer_end] == '\r' &&
+                         response[trailer_end + 1] == '\n'))
+                    trailer_end++;
+                if (trailer_end + 1 >= response_length)
+                    return -1;
+                input = trailer_end + 2;
+            }
+            return -1;
+        }
+
+        if (chunk_size > FS_MAX_SIZE - output ||
+            chunk_size > response_length - input ||
+            input + chunk_size + 2 > response_length ||
+            response[input + chunk_size] != '\r' ||
+            response[input + chunk_size + 1] != '\n')
+            return chunk_size > FS_MAX_SIZE - output ? -2 : -1;
+
+        for (uint32_t i = 0; i < chunk_size; i++)
+            response[output + i] = response[input + i];
+        output += chunk_size;
+        input += chunk_size + 2;
+    }
+
+    return -1;
+}
+
+static int http_valid_filename(const char *name) {
+    if (!name || !*name)
+        return 0;
+    uint32_t length = 0;
+    for (const char *p = name; *p; p++) {
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
+            return 0;
+        if (++length >= FS_MAX_NAME)
+            return 0;
+    }
+    return strcmp(name, ".") != 0 && strcmp(name, "..") != 0;
+}
+
 static void cmd_http() {
-    if (argc != 2 && argc != 3) {
+    if (argc < 2 || argc > 4) {
         vga_printf_colour(LIGHT_RED, BLACK,
-                          "Usage: http <IPv4|hostname> [path]\n");
+                          "Usage: http <IPv4|hostname> [path] [file]\n");
         return;
     }
 
-    const char *path = argc == 3 ? args[2] : "/";
+    const char *path = argc >= 3 ? args[2] : "/";
     uint32_t path_length = 0;
     while (path[path_length]) {
         path_length++;
@@ -819,6 +945,20 @@ static void cmd_http() {
         vga_printf_colour(LIGHT_RED, BLACK,
                           "http: path must begin with '/'\n");
         return;
+    }
+    if (argc == 4) {
+        if (!http_valid_filename(args[3])) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "http: invalid filename (use up to %u letters, digits, '.', '_' or '-')\n",
+                              FS_MAX_NAME - 1);
+            return;
+        }
+        if (fs_exists(args[3])) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "http: file already exists: %s (remove it first)\n",
+                              args[3]);
+            return;
+        }
     }
 
     net_interface_info_t info;
@@ -838,7 +978,7 @@ static void cmd_http() {
     }
 
     static char response[HTTP_RESPONSE_CAPACITY];
-    uint16_t response_length = 0;
+    uint32_t response_length = 0;
     uint8_t truncated = 0;
     vga_printf("GET http://%s%s (", args[1], path);
     print_ipv4(destination);
@@ -846,28 +986,85 @@ static void cmd_http() {
 
     int status = net_http_get(destination, args[1], path, response,
                               sizeof(response), &response_length, &truncated);
+    uint32_t body_offset = 0;
+    uint32_t body_length = 0;
+    char *body = 0;
+    int chunked = 0;
+    uint16_t response_status = 0;
+    int has_response_status = 0;
     if (response_length) {
-        uint16_t status_code;
-        int body_offset = http_response_body_offset(response, response_length);
-        if (http_response_status(response, response_length, &status_code) == 0)
-            vga_printf("HTTP status: %u\n", status_code);
+        int parsed_body_offset =
+            http_response_body_offset(response, response_length);
+        has_response_status =
+            http_response_status(response, response_length,
+                                 &response_status) == 0;
+        if (has_response_status)
+            vga_printf("HTTP status: %u\n", response_status);
         else
             vga_printf("HTTP status: unavailable\n");
 
-        if (body_offset >= 0) {
-            vga_printf("--- response body%s ---\n",
-                       truncated ? " (truncated)" : "");
-            http_print_text(response + body_offset,
-                            response_length - body_offset);
+        if (parsed_body_offset >= 0) {
+            body_offset = (uint32_t)parsed_body_offset;
+            body_length = response_length - body_offset;
+            chunked = http_response_is_chunked(response, body_offset);
+            body = response + body_offset;
+            if (chunked) {
+                int decode_status = http_decode_chunked(response, body_offset,
+                                                        response_length,
+                                                        &body_length);
+                if (decode_status == 0)
+                    body = response;
+                else {
+                    body = 0;
+                    vga_printf_colour(LIGHT_RED, BLACK,
+                                      "http: malformed or oversized chunked response\n");
+                }
+            }
+
+            if (body) {
+                uint32_t display_length = body_length;
+                if (display_length > HTTP_DISPLAY_CAPACITY)
+                    display_length = HTTP_DISPLAY_CAPACITY;
+                vga_printf("--- response body%s ---\n",
+                           truncated || display_length < body_length
+                               ? " (display limited)" : "");
+                http_print_text(body, display_length);
+            }
         } else {
             vga_printf_colour(YELLOW, BLACK,
                               "HTTP headers incomplete; showing received response\n");
-            http_print_text(response, response_length);
+            uint32_t display_length = response_length;
+            if (display_length > HTTP_DISPLAY_CAPACITY)
+                display_length = HTTP_DISPLAY_CAPACITY;
+            http_print_text(response, display_length);
         }
     }
 
     if (status == 0) {
         vga_printf("HTTP connection closed cleanly.\n");
+        if (argc == 4) {
+            if (!body || body_offset == 0 || !has_response_status) {
+                vga_printf_colour(LIGHT_RED, BLACK,
+                                  "http: response body is incomplete or invalid; nothing saved\n");
+            } else if (response_status < 200 || response_status >= 300) {
+                vga_printf_colour(LIGHT_RED, BLACK,
+                                  "http: not saving unsuccessful HTTP status %u\n",
+                                  response_status);
+            } else if (truncated) {
+                vga_printf_colour(LIGHT_RED, BLACK,
+                                  "http: response exceeded the download limit; nothing saved\n");
+            } else if (body_length > FS_MAX_SIZE) {
+                vga_printf_colour(LIGHT_RED, BLACK,
+                                  "http: response body exceeds the filesystem limit (%u bytes)\n",
+                                  FS_MAX_SIZE);
+            } else if (fs_write(args[3], (const uint8_t *)body,
+                                body_length) != 0) {
+                vga_printf_colour(LIGHT_RED, BLACK,
+                                  "http: failed to save %s\n", args[3]);
+            } else {
+                vga_printf("Saved %u bytes to %s\n", body_length, args[3]);
+            }
+        }
     } else if (status == -2) {
         vga_printf_colour(LIGHT_RED, BLACK,
                           "http: could not reach destination (ARP timeout)\n");

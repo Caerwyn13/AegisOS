@@ -41,7 +41,7 @@ A simple x86 operating system written in C and NASM assembly.
 | `net` | Show the network interface configuration |
 | `ping <IPv4\|hostname>` | Send four ICMP echo requests to an IPv4 address or resolve and ping a hostname |
 | `tcp <IPv4\|hostname> <port>` | Open a TCP connection, then attempt a clean close |
-| `http <IPv4\|hostname> [path]` | Fetch an HTTP path and display its status and bounded response body |
+| `http <IPv4\|hostname> [path] [file]` | Fetch an HTTP path; optionally save its body to AegisFS |
 | `mem` | Show free memory in KB |
 | `memmap` | Show the GRUB memory map |
 | `uptime` | Show system uptime |
@@ -97,15 +97,20 @@ application data. For example, `tcp example.com 80` attempts a TCP handshake
 and graceful close.
 The `http` command performs a plain HTTP/1.0 GET request on port 80. An
 optional absolute path selects a resource; if omitted, `/` is requested.
-Response headers are parsed to show the HTTP status, and up to 1023 response
-bytes are retained for displaying the body. For example:
+Response headers are parsed to show the HTTP status, and up to 1023 body bytes
+are displayed. Add a filename to save a successful response body to AegisFS:
 
 ```text
 http example.com
 http example.com /robots.txt
+http example.com / saved.html
 ```
 
-HTTPS is not supported.
+Downloads are limited to the filesystem's 32 KiB maximum file size, require a
+2xx HTTP status, decode chunked transfer responses, and do not overwrite an
+existing file. Use `cat saved.html` to inspect a saved response, or remove it
+with `rm saved.html` before downloading to that name again. HTTPS is not
+supported.
 
 `make run` enables the QEMU e1000 adapter and user-mode network. When launching
 QEMU manually, include:
