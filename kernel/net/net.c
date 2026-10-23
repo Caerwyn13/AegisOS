@@ -16,6 +16,17 @@
 #define PING_TIMEOUT_MS 1000
 #define PING_INTERVAL_MS 1000
 
+// DHCP Settings
+#define DHCP_CLIENT_PORT 68
+#define DHCP_SERVER_PORT 67
+#define DHCP_FIXED_SIZE  240
+#define DHCP_TIMEOUT_MS  4000
+
+#define DHCP_DISCOVER 1
+#define DHCP_OFFER    2
+#define DHCP_REQUEST  3
+#define DHCP_ACK      5
+
 typedef struct __attribute__((packed)) {
     uint8_t destination[6];
     uint8_t source[6];
@@ -68,15 +79,229 @@ static void copy_mac(uint8_t *destination, const uint8_t *source) {
         destination[i] = source[i];
 }
 
+static int send_dhcp_message(uint8_t message_type, uint32_t xid, uint32_t requested_ip, uint32_t server_ip) {
+    static const uint8_t broadcast[6] = {
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+    };
+
+    memset(packet_buffer, 0, PACKET_BUFFER_SIZE);
+
+    ethernet_header_t *ethernet = (ethernet_header_t *)packet_buffer;
+    copy_mac(ethernet->destination, broadcast);
+    copy_mac(ethernet->source, interface_info.mac);
+    ethernet->type = __builtin_bswap16(ETHERNET_TYPE_IPV4);
+
+    uint8_t *ip = packet_buffer + ETHERNET_HEADER_SIZE;
+    ip[0] = 0x45;
+    ip[8] = 64;
+    ip[9] = 17;
+    write_be32(ip + 12, 0);
+    write_be32(ip + 16, 0xFFFFFFFF);
+
+    uint8_t *udp = ip + IPV4_HEADER_SIZE;
+    write_be16(udp, DHCP_CLIENT_PORT);
+    write_be16(udp + 2, DHCP_SERVER_PORT);
+
+    uint8_t *bootp = udp + 8;
+    bootp[0] = 1;
+    bootp[1] = 1;
+    bootp[2] = 6;
+    write_be32(bootp + 4, xid);
+    write_be16(bootp + 10, 0x8000);
+    copy_mac(bootp + 28, interface_info.mac);
+
+    bootp[236] = 99;
+    bootp[237] = 130;
+    bootp[238] = 83;
+    bootp[239] = 99;
+
+    uint32_t options_length = 0;
+    uint8_t *options = bootp + DHCP_FIXED_SIZE;
+
+    options[options_length++] = 53;
+    options[options_length++] = 1;
+    options[options_length++] = message_type;
+
+    if (message_type == DHCP_REQUEST) {
+        options[options_length++] = 50;
+        options[options_length++] = 4;
+        write_be32(options + options_length, requested_ip);
+        options_length += 4;
+
+        options[options_length++] = 54;
+        options[options_length++] = 4;
+        write_be32(options + options_length, server_ip);
+        options_length += 4;
+    }
+
+    options[options_length++] = 55;
+    options[options_length++] = 3;
+    options[options_length++] = 1;
+    options[options_length++] = 3;
+    options[options_length++] = 6;
+    options[options_length++] = 255;
+
+    uint16_t bootp_length = DHCP_FIXED_SIZE + options_length;
+    uint16_t udp_length = 8 + bootp_length;
+    uint16_t ip_length = IPV4_HEADER_SIZE + udp_length;
+    uint16_t frame_length = ETHERNET_HEADER_SIZE + ip_length;
+
+    write_be16(udp + 4, udp_length);
+    write_be16(ip + 2, ip_length);
+    write_be16(ip + 10, checksum(ip, IPV4_HEADER_SIZE));
+
+    return e1000_send(packet_buffer, frame_length);
+}
+
+static int wait_dhcp_reply(uint8_t expected_type, uint32_t xid,
+                           uint32_t expected_server, uint32_t *offered_ip,
+                           uint32_t *netmask, uint32_t *gateway,
+                           uint32_t *server_ip) {
+    uint32_t start = pit_ticks();
+
+    while ((uint32_t)(pit_ticks() - start) < DHCP_TIMEOUT_MS) {
+        int frame_length = e1000_receive(packet_buffer, sizeof(packet_buffer));
+        if (frame_length <= 0 ||
+            frame_length < ETHERNET_HEADER_SIZE + IPV4_HEADER_SIZE)
+            continue;
+
+        if (read_be16(packet_buffer + 12) != ETHERNET_TYPE_IPV4)
+            continue;
+
+        const uint8_t *ip = packet_buffer + ETHERNET_HEADER_SIZE;
+        uint32_t ip_header_length = (ip[0] & 0x0F) * 4;
+        if ((ip[0] >> 4) != 4 ||
+            ip_header_length < IPV4_HEADER_SIZE ||
+            ip[9] != 17 ||
+            (read_be16(ip + 6) & 0x3FFF) != 0 ||
+            frame_length < ETHERNET_HEADER_SIZE + ip_header_length + 8)
+            continue;
+
+        uint16_t ip_length = read_be16(ip + 2);
+        if (ip_length < ip_header_length + 8 ||
+            ip_length > frame_length - ETHERNET_HEADER_SIZE ||
+            checksum(ip, ip_header_length) != 0)
+            continue;
+
+        const uint8_t *udp = ip + ip_header_length;
+        uint16_t udp_length = read_be16(udp + 4);
+        if (read_be16(udp) != DHCP_SERVER_PORT ||
+            read_be16(udp + 2) != DHCP_CLIENT_PORT ||
+            udp_length < 8 + DHCP_FIXED_SIZE ||
+            udp_length > ip_length - ip_header_length)
+            continue;
+
+        const uint8_t *bootp = udp + 8;
+        uint16_t bootp_length = udp_length - 8;
+        if (bootp[0] != 2 || bootp[1] != 1 || bootp[2] != 6 ||
+            read_be32(bootp + 4) != xid || bootp_length < DHCP_FIXED_SIZE ||
+            bootp[236] != 99 || bootp[237] != 130 ||
+            bootp[238] != 83 || bootp[239] != 99)
+            continue;
+
+        int matching_mac = 1;
+        for (uint32_t i = 0; i < 6; i++) {
+            if (bootp[28 + i] != interface_info.mac[i]) {
+                matching_mac = 0;
+                break;
+            }
+        }
+        if (!matching_mac)
+            continue;
+
+        uint8_t reply_type = 0;
+        uint32_t reply_netmask = 0;
+        uint32_t reply_gateway = 0;
+        uint32_t reply_server = 0;
+        uint32_t option_index = DHCP_FIXED_SIZE;
+
+        while (option_index < bootp_length) {
+            uint8_t code = bootp[option_index++];
+            if (code == 255)
+                break;
+            if (code == 0)
+                continue;
+            if (option_index >= bootp_length)
+                break;
+
+            uint8_t option_length = bootp[option_index++];
+            if (option_length > bootp_length - option_index)
+                break;
+
+            const uint8_t *value = bootp + option_index;
+            if (code == 53 && option_length == 1)
+                reply_type = value[0];
+            else if (code == 1 && option_length == 4)
+                reply_netmask = read_be32(value);
+            else if (code == 3 && option_length >= 4)
+                reply_gateway = read_be32(value);
+            else if (code == 54 && option_length == 4)
+                reply_server = read_be32(value);
+
+            option_index += option_length;
+        }
+
+        if (reply_type != expected_type)
+            continue;
+        if (expected_server && reply_server != expected_server)
+            continue;
+
+        *offered_ip = read_be32(bootp + 16);
+        *netmask = reply_netmask;
+        *gateway = reply_gateway;
+        *server_ip = reply_server;
+        return 0;
+    }
+
+    return -1;
+}
+
+static int dhcp_configure(void) {
+    for (uint32_t attempt = 0; attempt < 3; attempt++) {
+        uint32_t xid = (pit_ticks() << 16) ^
+                       ((uint32_t)interface_info.mac[2] << 24) ^
+                       ((uint32_t)interface_info.mac[4] << 8) ^
+                       interface_info.mac[5];
+        uint32_t offered_ip = 0;
+        uint32_t netmask = 0;
+        uint32_t gateway = 0;
+        uint32_t server_ip = 0;
+
+        if (send_dhcp_message(DHCP_DISCOVER, xid, 0, 0) != 0)
+            continue;
+
+        if (wait_dhcp_reply(DHCP_OFFER, xid, 0, &offered_ip,
+                            &netmask, &gateway, &server_ip) != 0 ||
+            offered_ip == 0 || server_ip == 0)
+            continue;
+
+        if (send_dhcp_message(DHCP_REQUEST, xid, offered_ip, server_ip) != 0)
+            continue;
+
+        if (wait_dhcp_reply(DHCP_ACK, xid, server_ip, &offered_ip,
+                            &netmask, &gateway, &server_ip) != 0 ||
+            offered_ip == 0 || netmask == 0)
+            continue;
+
+        interface_info.ip_address = offered_ip;
+        interface_info.netmask = netmask;
+        interface_info.gateway = gateway;
+        return 0;
+    }
+
+    return -1;
+}
+
+
 void net_init(void) {
     memset(&interface_info, 0, sizeof(interface_info));
 
     if (e1000_init(interface_info.mac) != 0)
         return;
 
-    interface_info.ip_address = 0x0A00020F;
-    interface_info.gateway = 0x0A000202;
-    interface_info.netmask = 0xFFFFFF00;
+    if (dhcp_configure() != 0)
+        return;
+
     interface_info.available = 1;
 }
 
