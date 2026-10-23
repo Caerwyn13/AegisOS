@@ -22,6 +22,7 @@
 #define MAX_ARGS        8
 #define HELP_PAGE_SIZE  8
 #define KEY_QUEUE_SIZE  128
+#define HTTP_RESPONSE_CAPACITY 1024
 // ============================================================
 // State
 // ============================================================
@@ -50,6 +51,8 @@ static const char *help_lines[] = {
     "  taskdemo               - demonstrate multitasking",
     "  net                    - show network interface status",
     "  ping <IPv4|hostname>   - ping an IPv4 address or hostname",
+    "  tcp <IPv4|hostname> <port> - test and close a TCP connection",
+    "  http <IPv4|hostname>   - fetch the HTTP homepage",
     "  mem                    - show free memory",
     "  memmap                 - show memory map",
     "  heap                   - shows the heap",
@@ -479,6 +482,26 @@ static void print_ipv4(uint32_t address) {
                address & 0xFF);
 }
 
+static int parse_tcp_port(const char *text, uint16_t *port) {
+    if (!text || !*text || !port)
+        return -1;
+
+    uint32_t value = 0;
+    for (const char *p = text; *p; p++) {
+        if (*p < '0' || *p > '9')
+            return -1;
+        uint32_t digit = (uint32_t)(*p - '0');
+        if (value > (65535 - digit) / 10)
+            return -1;
+        value = value * 10 + digit;
+    }
+
+    if (value == 0)
+        return -1;
+    *port = (uint16_t)value;
+    return 0;
+}
+
 static void cmd_net() {
     if (argc != 1) {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: net\n");
@@ -583,6 +606,129 @@ static void cmd_ping() {
                    min_ms, total_ms / result.received, max_ms);
 }
 
+static void cmd_tcp() {
+    if (argc != 3) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Usage: tcp <IPv4|hostname> <port>\n");
+        return;
+    }
+
+    uint16_t port;
+    if (parse_tcp_port(args[2], &port) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "tcp: invalid port: %s\n", args[2]);
+        return;
+    }
+
+    net_interface_info_t info;
+    net_get_interface(&info);
+    if (!info.available) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "tcp: no supported network interface (QEMU e1000)\n");
+        return;
+    }
+
+    uint32_t destination;
+    if (net_parse_ipv4(args[1], &destination) != 0 &&
+        net_resolve_ipv4(args[1], &destination) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "tcp: could not resolve host: %s\n", args[1]);
+        return;
+    }
+
+    vga_printf("TCP connect to %s (", args[1]);
+    print_ipv4(destination);
+    vga_printf("):%u\n", port);
+
+    int status = net_tcp_connect_close(destination, port);
+    if (status == 0) {
+        vga_printf("Connection established and closed cleanly.\n");
+    } else if (status == -2) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "tcp: could not reach destination (ARP timeout)\n");
+    } else if (status == -3) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "tcp: connection refused or packet send failed\n");
+    } else if (status == -4) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "tcp: connection timed out\n");
+    } else if (status == -5) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "tcp: peer did not complete a clean close\n");
+    } else {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "tcp: connection failed (error %d)\n", status);
+    }
+}
+
+static void cmd_http() {
+    if (argc != 2) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Usage: http <IPv4|hostname>\n");
+        return;
+    }
+
+    net_interface_info_t info;
+    net_get_interface(&info);
+    if (!info.available) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "http: no supported network interface (QEMU e1000)\n");
+        return;
+    }
+
+    uint32_t destination;
+    if (net_parse_ipv4(args[1], &destination) != 0 &&
+        net_resolve_ipv4(args[1], &destination) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "http: could not resolve host: %s\n", args[1]);
+        return;
+    }
+
+    static char response[HTTP_RESPONSE_CAPACITY];
+    uint16_t response_length = 0;
+    uint8_t truncated = 0;
+    vga_printf("GET http://%s/ (", args[1]);
+    print_ipv4(destination);
+    vga_printf(")\n");
+
+    int status = net_http_get(destination, args[1], response,
+                              sizeof(response), &response_length, &truncated);
+    if (response_length) {
+        vga_printf("--- HTTP response (%u bytes%s) ---\n",
+                   response_length, truncated ? ", truncated" : "");
+        for (uint32_t i = 0; i < response_length; i++) {
+            char c = response[i];
+            if (c == '\r')
+                continue;
+            if (c == '\n' || c == '\t' || (c >= 32 && c <= 126))
+                vga_putchar(c);
+            else
+                vga_putchar('.');
+        }
+        if (response[response_length - 1] != '\n')
+            vga_putchar('\n');
+    }
+
+    if (status == 0) {
+        vga_printf("HTTP connection closed cleanly.\n");
+    } else if (status == -2) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "http: could not reach destination (ARP timeout)\n");
+    } else if (status == -3) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "http: connection refused or packet send failed\n");
+    } else if (status == -4) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "http: connection timed out\n");
+    } else if (status == -5) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "http: response or connection close timed out\n");
+    } else {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "http: request failed (error %d)\n", status);
+    }
+}
+
 static void cmd_about() {
     vga_printf_colour(LIGHT_CYAN, BLACK, "========== ABOUT AegisOS ==========\n");
     vga_printf("A simple x86 OS written solely by ");
@@ -680,6 +826,8 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "taskdemo") == 0) cmd_taskdemo();
     else if (strcmp(args[0], "net")      == 0) cmd_net();
     else if (strcmp(args[0], "ping")     == 0) cmd_ping();
+    else if (strcmp(args[0], "tcp")      == 0) cmd_tcp();
+    else if (strcmp(args[0], "http")     == 0) cmd_http();
 
     else if (strcmp(args[0], "atatest")     == 0) _cmd_atatest();
     else if (strcmp(args[0], "inodetest")   == 0) _cmd_inodetest();

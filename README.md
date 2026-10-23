@@ -25,7 +25,7 @@ A simple x86 operating system written in C and NASM assembly.
 - Syscall interface (`int 0x80`) for userspace programs
 - ACPI shutdown and reboot support
 - Preemptive round-robin scheduling for kernel tasks
-- QEMU e1000 networking with DHCP, DNS lookups, and IPv4 ping
+- QEMU e1000 networking with DHCP, DNS lookups, IPv4 ping, and TCP connection tests
 - Interactive shell with command history and pagination
 
 ## Shell Commands
@@ -40,6 +40,8 @@ A simple x86 operating system written in C and NASM assembly.
 | `rps <choice>` | Play rock-paper-scissors (`rock`, `paper`, or `scissors`) against AegisOS |
 | `net` | Show the network interface configuration |
 | `ping <IPv4\|hostname>` | Send four ICMP echo requests to an IPv4 address or resolve and ping a hostname |
+| `tcp <IPv4\|hostname> <port>` | Open a TCP connection, then attempt a clean close |
+| `http <IPv4\|hostname>` | Fetch and display a bounded HTTP homepage response |
 | `mem` | Show free memory in KB |
 | `memmap` | Show the GRUB memory map |
 | `uptime` | Show system uptime |
@@ -84,6 +86,11 @@ ping example.com
 Hostname lookups use the DNS server provided by DHCP and support IPv4 address
 (A) records. If DHCP does not provide a DNS server, numeric-address pings still
 work, but hostname lookups cannot. `ping` sends four ICMP echo requests.
+The `tcp` command is a connection test only; it does not send or receive
+application data. For example, `tcp example.com 80` attempts a TCP handshake
+and graceful close.
+The `http` command performs a plain HTTP/1.0 GET request for `/` on port 80 and
+displays up to 1023 response bytes. HTTPS is not supported.
 
 `make run` enables the QEMU e1000 adapter and user-mode network. When launching
 QEMU manually, include:

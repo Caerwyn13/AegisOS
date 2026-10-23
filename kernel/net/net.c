@@ -10,11 +10,23 @@
 #define ETHERNET_TYPE_IPV4 0x0800
 #define ETHERNET_TYPE_ARP 0x0806
 #define IPV4_PROTOCOL_ICMP 1
+#define IPV4_PROTOCOL_TCP 6
 #define ARP_PACKET_SIZE 28
 #define PACKET_BUFFER_SIZE 1518
 #define ARP_TIMEOUT_MS 2000
 #define PING_TIMEOUT_MS 1000
 #define PING_INTERVAL_MS 1000
+#define TCP_TIMEOUT_MS 1000
+#define TCP_RETRIES 3
+#define TCP_HEADER_SIZE 20
+#define HTTP_TIMEOUT_MS 8000
+#define HTTP_PORT 80
+
+#define TCP_FLAG_FIN 0x01
+#define TCP_FLAG_SYN 0x02
+#define TCP_FLAG_RST 0x04
+#define TCP_FLAG_PSH 0x08
+#define TCP_FLAG_ACK 0x10
 
 // DHCP Settings
 #define DHCP_CLIENT_PORT 68
@@ -73,6 +85,28 @@ static uint16_t checksum(const uint8_t *data, uint32_t length) {
     }
     if (length)
         sum += (uint16_t)data[0] << 8;
+    while (sum >> 16)
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    return (uint16_t)~sum;
+}
+
+static uint16_t tcp_checksum(uint32_t source, uint32_t destination,
+                             const uint8_t *segment, uint16_t length) {
+    uint32_t sum = 0;
+    sum += (source >> 16) & 0xFFFF;
+    sum += source & 0xFFFF;
+    sum += (destination >> 16) & 0xFFFF;
+    sum += destination & 0xFFFF;
+    sum += IPV4_PROTOCOL_TCP;
+    sum += length;
+
+    while (length > 1) {
+        sum += read_be16(segment);
+        segment += 2;
+        length -= 2;
+    }
+    if (length)
+        sum += (uint16_t)segment[0] << 8;
     while (sum >> 16)
         sum = (sum & 0xFFFF) + (sum >> 16);
     return (uint16_t)~sum;
@@ -788,4 +822,373 @@ int net_ping_ipv4(uint32_t destination, net_ping_result_t *result) {
     }
 
     return 0;
+}
+
+typedef struct {
+    uint32_t sequence;
+    uint32_t acknowledgement;
+    uint16_t payload_length;
+    uint8_t flags;
+} tcp_segment_info_t;
+
+static int tcp_send_segment(uint32_t destination, const uint8_t *destination_mac,
+                            uint16_t source_port, uint16_t destination_port,
+                            uint32_t sequence, uint32_t acknowledgement,
+                            uint8_t flags, const uint8_t *payload,
+                            uint16_t payload_length) {
+    const uint16_t tcp_length = TCP_HEADER_SIZE + payload_length;
+    const uint16_t ip_length = IPV4_HEADER_SIZE + tcp_length;
+    const uint16_t frame_length = ETHERNET_HEADER_SIZE + ip_length;
+    memset(packet_buffer, 0, frame_length);
+
+    ethernet_header_t *ethernet = (ethernet_header_t *)packet_buffer;
+    copy_mac(ethernet->destination, destination_mac);
+    copy_mac(ethernet->source, interface_info.mac);
+    ethernet->type = __builtin_bswap16(ETHERNET_TYPE_IPV4);
+
+    uint8_t *ip = packet_buffer + ETHERNET_HEADER_SIZE;
+    ip[0] = 0x45;
+    write_be16(ip + 2, ip_length);
+    write_be16(ip + 4, next_identifier++);
+    write_be16(ip + 6, 0x4000);
+    ip[8] = 64;
+    ip[9] = IPV4_PROTOCOL_TCP;
+    write_be32(ip + 12, interface_info.ip_address);
+    write_be32(ip + 16, destination);
+    write_be16(ip + 10, checksum(ip, IPV4_HEADER_SIZE));
+
+    uint8_t *tcp = ip + IPV4_HEADER_SIZE;
+    write_be16(tcp, source_port);
+    write_be16(tcp + 2, destination_port);
+    write_be32(tcp + 4, sequence);
+    write_be32(tcp + 8, acknowledgement);
+    tcp[12] = 5 << 4;
+    tcp[13] = flags;
+    write_be16(tcp + 14, 4096);
+    if (payload_length) {
+        if (!payload || tcp_length + IPV4_HEADER_SIZE + ETHERNET_HEADER_SIZE >
+                            PACKET_BUFFER_SIZE)
+            return -1;
+        memcpy(tcp + TCP_HEADER_SIZE, payload, payload_length);
+    }
+    write_be16(tcp + 16,
+               tcp_checksum(interface_info.ip_address, destination,
+                            tcp, tcp_length));
+
+    return e1000_send(packet_buffer, frame_length);
+}
+
+static int tcp_receive_segment(uint32_t destination, uint16_t source_port,
+                               uint16_t destination_port,
+                               tcp_segment_info_t *segment,
+                               uint8_t *payload, uint16_t payload_capacity) {
+    int frame_length = e1000_receive(packet_buffer, sizeof(packet_buffer));
+    if (frame_length <= 0 ||
+        frame_length < ETHERNET_HEADER_SIZE + IPV4_HEADER_SIZE + TCP_HEADER_SIZE ||
+        read_be16(packet_buffer + 12) != ETHERNET_TYPE_IPV4)
+        return 0;
+
+    const uint8_t *ip = packet_buffer + ETHERNET_HEADER_SIZE;
+    uint32_t ip_header_length = (ip[0] & 0x0F) * 4;
+    if ((ip[0] >> 4) != 4 ||
+        ip_header_length < IPV4_HEADER_SIZE ||
+        ip[9] != IPV4_PROTOCOL_TCP ||
+        (read_be16(ip + 6) & 0x3FFF) != 0 ||
+        (uint32_t)frame_length <
+            ETHERNET_HEADER_SIZE + ip_header_length + TCP_HEADER_SIZE)
+        return 0;
+
+    uint16_t ip_length = read_be16(ip + 2);
+    if (ip_length < ip_header_length + TCP_HEADER_SIZE ||
+        ip_length > (uint32_t)frame_length - ETHERNET_HEADER_SIZE ||
+        checksum(ip, ip_header_length) != 0 ||
+        read_be32(ip + 12) != destination ||
+        read_be32(ip + 16) != interface_info.ip_address)
+        return 0;
+
+    const uint8_t *tcp = ip + ip_header_length;
+    uint32_t tcp_header_length = (tcp[12] >> 4) * 4;
+    uint16_t tcp_length = ip_length - ip_header_length;
+    if (tcp_header_length < TCP_HEADER_SIZE ||
+        tcp_header_length > tcp_length ||
+        read_be16(tcp) != destination_port ||
+        read_be16(tcp + 2) != source_port ||
+        tcp_checksum(destination, interface_info.ip_address,
+                     tcp, tcp_length) != 0)
+        return 0;
+
+    segment->sequence = read_be32(tcp + 4);
+    segment->acknowledgement = read_be32(tcp + 8);
+    segment->payload_length = tcp_length - tcp_header_length;
+    segment->flags = tcp[13];
+    if (payload && payload_capacity) {
+        uint16_t copy_length = segment->payload_length;
+        if (copy_length > payload_capacity)
+            copy_length = payload_capacity;
+        memcpy(payload, tcp + tcp_header_length, copy_length);
+    }
+    return 1;
+}
+
+int net_tcp_connect_close(uint32_t destination, uint16_t port) {
+    if (!interface_info.available || !destination || !port)
+        return -1;
+
+    uint32_t next_hop = route_ip(destination);
+    uint8_t destination_mac[6];
+    if (resolve_mac(next_hop, destination_mac) != 0)
+        return -2;
+
+    uint16_t identifier = next_identifier++;
+    uint16_t source_port = 49152 + (identifier & 0x3FFF);
+    uint32_t client_sequence = (pit_ticks() << 16) ^ identifier;
+    uint32_t client_next = client_sequence + 1;
+    tcp_segment_info_t segment;
+    int connected = 0;
+
+    for (uint32_t attempt = 0; attempt < TCP_RETRIES && !connected; attempt++) {
+        if (tcp_send_segment(destination, destination_mac, source_port, port,
+                             client_sequence, 0, TCP_FLAG_SYN, 0, 0) != 0)
+            return -3;
+
+        uint32_t start = pit_ticks();
+        while ((uint32_t)(pit_ticks() - start) < TCP_TIMEOUT_MS) {
+            if (!tcp_receive_segment(destination, source_port, port, &segment,
+                                     0, 0))
+                continue;
+            if (segment.flags & TCP_FLAG_RST)
+                return -3;
+            if ((segment.flags & (TCP_FLAG_SYN | TCP_FLAG_ACK)) ==
+                    (TCP_FLAG_SYN | TCP_FLAG_ACK) &&
+                segment.acknowledgement == client_next) {
+                uint32_t server_next = segment.sequence + 1 +
+                                       segment.payload_length;
+                if (tcp_send_segment(destination, destination_mac, source_port,
+                                     port, client_next, server_next,
+                                     TCP_FLAG_ACK, 0, 0) != 0)
+                    return -3;
+                segment.sequence = server_next;
+                connected = 1;
+                break;
+            }
+            pit_sleep(1);
+        }
+    }
+
+    if (!connected)
+        return -4;
+
+    uint32_t server_next = segment.sequence;
+    client_next++;
+
+    for (uint32_t attempt = 0; attempt < TCP_RETRIES; attempt++) {
+        if (tcp_send_segment(destination, destination_mac, source_port, port,
+                             client_next - 1, server_next,
+                             TCP_FLAG_FIN | TCP_FLAG_ACK, 0, 0) != 0)
+            return -3;
+
+        uint32_t start = pit_ticks();
+        while ((uint32_t)(pit_ticks() - start) < TCP_TIMEOUT_MS) {
+            if (!tcp_receive_segment(destination, source_port, port, &segment,
+                                     0, 0))
+                continue;
+            if (segment.flags & TCP_FLAG_RST)
+                return -3;
+            if (!(segment.flags & TCP_FLAG_ACK) ||
+                segment.acknowledgement != client_next ||
+                segment.sequence != server_next) {
+                pit_sleep(1);
+                continue;
+            }
+
+            server_next += segment.payload_length;
+            if (segment.flags & TCP_FLAG_FIN) {
+                server_next++;
+                if (tcp_send_segment(destination, destination_mac, source_port,
+                                     port, client_next, server_next,
+                                     TCP_FLAG_ACK, 0, 0) != 0)
+                    return -3;
+                return 0;
+            }
+
+            if (segment.payload_length &&
+                tcp_send_segment(destination, destination_mac, source_port,
+                                 port, client_next, server_next,
+                                 TCP_FLAG_ACK, 0, 0) != 0)
+                return -3;
+            pit_sleep(1);
+        }
+    }
+
+    (void)tcp_send_segment(destination, destination_mac, source_port, port,
+                           client_next, server_next,
+                           TCP_FLAG_RST | TCP_FLAG_ACK, 0, 0);
+    return -5;
+}
+
+int net_http_get(uint32_t destination, const char *host, char *response,
+                 uint16_t response_capacity, uint16_t *response_length,
+                 uint8_t *truncated) {
+    if (!interface_info.available || !destination || !host || !*host ||
+        !response || response_capacity == 0 || !response_length || !truncated)
+        return -1;
+
+    uint32_t host_length = 0;
+    for (const char *p = host; *p; p++) {
+        char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == '-'))
+            return -1;
+        if (++host_length > 253)
+            return -1;
+    }
+
+    char request[320];
+    static const char request_prefix[] = "GET / HTTP/1.0\r\nHost: ";
+    static const char request_suffix[] = "\r\nConnection: close\r\n\r\n";
+    uint32_t prefix_length = sizeof(request_prefix) - 1;
+    uint32_t suffix_length = sizeof(request_suffix) - 1;
+    uint32_t request_length = prefix_length + host_length + suffix_length;
+    if (request_length > sizeof(request))
+        return -1;
+
+    uint32_t cursor = 0;
+    for (uint32_t i = 0; i < prefix_length; i++)
+        request[cursor++] = request_prefix[i];
+    for (uint32_t i = 0; i < host_length; i++)
+        request[cursor++] = host[i];
+    for (uint32_t i = 0; i < suffix_length; i++)
+        request[cursor++] = request_suffix[i];
+
+    *response_length = 0;
+    *truncated = 0;
+    response[0] = '\0';
+
+    uint32_t next_hop = route_ip(destination);
+    uint8_t destination_mac[6];
+    if (resolve_mac(next_hop, destination_mac) != 0)
+        return -2;
+
+    uint16_t identifier = next_identifier++;
+    uint16_t source_port = 49152 + (identifier & 0x3FFF);
+    uint32_t client_sequence = (pit_ticks() << 16) ^ identifier;
+    uint32_t client_next = client_sequence + 1;
+    tcp_segment_info_t segment;
+    int connected = 0;
+
+    for (uint32_t attempt = 0; attempt < TCP_RETRIES && !connected; attempt++) {
+        if (tcp_send_segment(destination, destination_mac, source_port, HTTP_PORT,
+                             client_sequence, 0, TCP_FLAG_SYN, 0, 0) != 0)
+            return -3;
+
+        uint32_t start = pit_ticks();
+        while ((uint32_t)(pit_ticks() - start) < TCP_TIMEOUT_MS) {
+            if (!tcp_receive_segment(destination, source_port, HTTP_PORT,
+                                     &segment, 0, 0))
+                continue;
+            if (segment.flags & TCP_FLAG_RST)
+                return -3;
+            if ((segment.flags & (TCP_FLAG_SYN | TCP_FLAG_ACK)) ==
+                    (TCP_FLAG_SYN | TCP_FLAG_ACK) &&
+                segment.acknowledgement == client_next) {
+                uint32_t server_next = segment.sequence + 1 +
+                                       segment.payload_length;
+                if (tcp_send_segment(destination, destination_mac, source_port,
+                                     HTTP_PORT, client_next, server_next,
+                                     TCP_FLAG_ACK, 0, 0) != 0)
+                    return -3;
+
+                client_next += request_length;
+                if (tcp_send_segment(destination, destination_mac, source_port,
+                                     HTTP_PORT, client_next - request_length,
+                                     server_next, TCP_FLAG_PSH | TCP_FLAG_ACK,
+                                     (const uint8_t *)request,
+                                     request_length) != 0)
+                    return -3;
+                segment.sequence = server_next;
+                connected = 1;
+                break;
+            }
+            pit_sleep(1);
+        }
+    }
+
+    if (!connected)
+        return -4;
+
+    uint32_t server_next = segment.sequence;
+    uint8_t incoming[PACKET_BUFFER_SIZE];
+    uint32_t start = pit_ticks();
+    int peer_closed = 0;
+    while ((uint32_t)(pit_ticks() - start) < HTTP_TIMEOUT_MS) {
+        if (!tcp_receive_segment(destination, source_port, HTTP_PORT, &segment,
+                                 incoming, sizeof(incoming)))
+            continue;
+        if (segment.flags & TCP_FLAG_RST)
+            return -5;
+        if (!(segment.flags & TCP_FLAG_ACK) ||
+            segment.acknowledgement != client_next ||
+            segment.sequence != server_next) {
+            pit_sleep(1);
+            continue;
+        }
+
+        if (segment.payload_length) {
+            uint32_t remaining = response_capacity - 1 - *response_length;
+            uint32_t copied = segment.payload_length;
+            if (copied > remaining) {
+                copied = remaining;
+                *truncated = 1;
+            }
+            for (uint32_t i = 0; i < copied; i++)
+                response[*response_length + i] = (char)incoming[i];
+            *response_length += copied;
+            response[*response_length] = '\0';
+            server_next += segment.payload_length;
+        }
+
+        if (segment.flags & TCP_FLAG_FIN) {
+            server_next++;
+            if (tcp_send_segment(destination, destination_mac, source_port,
+                                 HTTP_PORT, client_next, server_next,
+                                 TCP_FLAG_ACK, 0, 0) != 0)
+                return -5;
+            peer_closed = 1;
+            break;
+        }
+
+        if (segment.payload_length &&
+            tcp_send_segment(destination, destination_mac, source_port,
+                             HTTP_PORT, client_next, server_next,
+                             TCP_FLAG_ACK, 0, 0) != 0)
+            return -5;
+        pit_sleep(1);
+    }
+
+    if (!peer_closed)
+        return -5;
+
+    uint32_t close_sequence = client_next;
+    client_next++;
+    for (uint32_t attempt = 0; attempt < TCP_RETRIES; attempt++) {
+        if (tcp_send_segment(destination, destination_mac, source_port,
+                             HTTP_PORT, close_sequence, server_next,
+                             TCP_FLAG_FIN | TCP_FLAG_ACK, 0, 0) != 0)
+            return -5;
+
+        start = pit_ticks();
+        while ((uint32_t)(pit_ticks() - start) < TCP_TIMEOUT_MS) {
+            if (!tcp_receive_segment(destination, source_port, HTTP_PORT,
+                                     &segment, 0, 0))
+                continue;
+            if (segment.flags & TCP_FLAG_RST)
+                return -5;
+            if ((segment.flags & TCP_FLAG_ACK) &&
+                segment.acknowledgement == client_next)
+                return 0;
+            pit_sleep(1);
+        }
+    }
+
+    return -5;
 }
