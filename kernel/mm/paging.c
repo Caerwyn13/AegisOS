@@ -116,8 +116,7 @@ void paging_unmap(uint32_t virt) {
     
     uint32_t phys = entry & ~0xFFF;
     
-    // Only free user pages (between 4MB and 32MB)
-    if (phys >= 0x400000 && phys < 0x2000000) {
+    if (virt >= USER_START && virt < USER_END) {
         pmm_free((void*)phys);
     }
     

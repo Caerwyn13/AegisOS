@@ -246,7 +246,6 @@ static void cmd_write() {
 }
 
 static void cmd_exec() {
-    vga_printf("Free pages before: %u\n", pmm_free_pages());
     if (argc < 2) {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: exec <file>\n");
         return;
@@ -262,22 +261,8 @@ static void cmd_exec() {
     vga_printf("Starting usermode...\n");
     
     enter_usermode(entry, USER_STACK_TOP);
-    vga_reset_cursor();
-
-    vga_printf("\n[OK] Returned!\n");
-    vga_printf("[DEBUG] About to print free pages...\n");
-    
-    vga_printf("Free pages after: %u\n", pmm_free_pages());
-    vga_printf("[DEBUG] About to unmap code...\n");
-
-    paging_unmap_range(0x400000, 0x410000);
-    vga_printf("[DEBUG] About to unmap stack...\n");
-    
+    paging_unmap_range(0x00400000, 0x00410000);
     paging_unmap_range(USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_TOP);
-    vga_printf("[DEBUG] Done!\n");
-
-    vga_printf("Free pages freed: %u\n", pmm_free_pages());
-    print_prompt();
 }
 
 static void cmd_rm() {

@@ -18,6 +18,7 @@
 #include "syscall.h"
 
 extern uint32_t stack_top;
+extern uint32_t kernel_stack_top;
 void (*exec_return_callback)() = 0;
 
 void kernel_main(multiboot_info_t *mbi) {
@@ -33,6 +34,7 @@ void kernel_main(multiboot_info_t *mbi) {
     keyboard_init();
     pmm_init(mbi);
     paging_init();
+    tss_set_kernel_stack(kernel_stack_top);
     heap_init();
     __asm__ volatile ("sti");
     pit_sleep(500);   

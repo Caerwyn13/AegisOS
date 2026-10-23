@@ -244,7 +244,7 @@ Use [Rufus](https://rufus.ie) to write the ISO to a USB drive in DD mode.
 
 ## Roadmap
 
-- [ ] User mode (ring 3)
+- [x] User mode (ring 3)
 - [ ] Multitasking / process scheduler
 - [ ] Expand AegisFS (directories, append, file permissions)
 - [ ] Network driver

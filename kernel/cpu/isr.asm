@@ -137,7 +137,6 @@ extern syscall_handler
 extern process_exited
 extern saved_kernel_esp
 extern saved_kernel_ebp
-extern saved_kernel_eip        ; ← ADD THIS
 
 global isr128
 isr128:
@@ -176,11 +175,13 @@ syscall_common:
     mov dword [process_exited], 0
     add esp, 8
 
-    ; Restore kernel stack
+    ; Resume enter_usermode as though it returned to its caller.
     mov esp, [saved_kernel_esp]
+    pop edi
+    pop esi
+    pop ebx
     mov ebp, [saved_kernel_ebp]
 
-    ; Restore kernel segments
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -190,6 +191,4 @@ syscall_common:
 
     sti
 
-    ; Jump to saved return address (DON'T use ret!)
-    mov eax, [saved_kernel_eip]
-    jmp eax
+    ret
