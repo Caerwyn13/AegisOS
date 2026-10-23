@@ -16,6 +16,8 @@
 #include "aegisfs.h"
 #include "heap.h"
 #include "syscall.h"
+#include "task.h"
+#include "net.h"
 
 extern uint32_t stack_top;
 extern uint32_t kernel_stack_top;
@@ -36,6 +38,7 @@ void kernel_main(multiboot_info_t *mbi) {
     paging_init();
     tss_set_kernel_stack(kernel_stack_top);
     heap_init();
+    task_init();
     __asm__ volatile ("sti");
 #ifndef ACPI_TEST_NO_STORAGE
     pit_sleep(500);   
@@ -46,7 +49,9 @@ void kernel_main(multiboot_info_t *mbi) {
     vga_printf("ACPI test build: ATA storage disabled\n");
 #endif
     syscall_init();
+    net_init();
     vga_clear();
     shell_init(mbi);
-    while(1);
+    while (1)
+        shell_process_input();
 }

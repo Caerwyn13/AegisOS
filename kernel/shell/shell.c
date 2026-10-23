@@ -13,11 +13,15 @@
 #include "elf.h"
 #include "usermode.h"
 #include "acpi.h"
+#include "task.h"
+#include "serial.h"
+#include "net.h"
 
 #define BUFFER_SIZE     256
 #define HISTORY_SIZE    10
 #define MAX_ARGS        8
 #define HELP_PAGE_SIZE  8
+#define KEY_QUEUE_SIZE  128
 // ============================================================
 // State
 // ============================================================
@@ -25,6 +29,9 @@
 static multiboot_info_t *mbi_ptr      = 0;
 static char              buf[BUFFER_SIZE];
 static int               buf_pos      = 0;
+static volatile uint32_t key_read_index;
+static volatile uint32_t key_write_index;
+static char key_queue[KEY_QUEUE_SIZE];
 
 static char history[HISTORY_SIZE][BUFFER_SIZE];
 static int  history_count             = 0;
@@ -40,6 +47,9 @@ static const char *help_lines[] = {
     "  clear -c <colour>      - clear with background colour",
     "  echo <text>            - print text",
     "  rps <choice>           - play rock-paper-scissors",
+    "  taskdemo               - demonstrate multitasking",
+    "  net                    - show network interface status",
+    "  ping <IPv4>            - ping an IPv4 address",
     "  mem                    - show free memory",
     "  memmap                 - show memory map",
     "  heap                   - shows the heap",
@@ -435,6 +445,134 @@ static void cmd_rps() {
         vga_printf_colour(LIGHT_GREEN, BLACK, "You win!\n");
 }
 
+static void task_demo_worker(void *arg) {
+    const char *name = (const char *)arg;
+    for (int i = 0; i < 5; i++) {
+        print("Task ");
+        print(name);
+        print(" is running\n");
+        pit_sleep(250);
+    }
+}
+
+static void cmd_taskdemo() {
+    if (task_create(task_demo_worker, "A") < 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Could not start demo task (task slots may be full)\n");
+        return;
+    }
+
+    if (task_create(task_demo_worker, "B") < 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Task A started, but no slot was available for task B\n");
+        return;
+    }
+
+    vga_printf("Started two kernel tasks. Watch the serial output for their turns.\n");
+}
+
+static void print_ipv4(uint32_t address) {
+    vga_printf("%u.%u.%u.%u",
+               (address >> 24) & 0xFF,
+               (address >> 16) & 0xFF,
+               (address >> 8) & 0xFF,
+               address & 0xFF);
+}
+
+static void cmd_net() {
+    if (argc != 1) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: net\n");
+        return;
+    }
+
+    net_interface_info_t info;
+    net_get_interface(&info);
+    if (!info.available) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "No supported network interface found (QEMU e1000 required)\n");
+        return;
+    }
+
+    vga_printf("Interface: e1000\nMAC: ");
+    for (uint32_t i = 0; i < sizeof(info.mac); i++) {
+        if (i)
+            vga_putchar(':');
+        if (info.mac[i] < 16)
+            vga_putchar('0');
+        vga_printf("%x", info.mac[i]);
+    }
+    vga_printf("\nIPv4: ");
+    print_ipv4(info.ip_address);
+    vga_printf("\nNetmask: ");
+    print_ipv4(info.netmask);
+    vga_printf("\nGateway: ");
+    print_ipv4(info.gateway);
+    vga_putchar('\n');
+}
+
+static void cmd_ping() {
+    if (argc != 2) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: ping <IPv4>\n");
+        return;
+    }
+
+    uint32_t destination;
+    if (net_parse_ipv4(args[1], &destination) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "ping: invalid IPv4 address: %s\n", args[1]);
+        return;
+    }
+
+    net_interface_info_t info;
+    net_get_interface(&info);
+    if (!info.available) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "ping: no supported network interface (QEMU e1000)\n");
+        return;
+    }
+
+    vga_printf("PING ");
+    print_ipv4(destination);
+    vga_printf(" (%s): 56 data bytes\n", args[1]);
+
+    net_ping_result_t result;
+    int status = net_ping_ipv4(destination, &result);
+    if (status == -2) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "ping: destination could not be reached (ARP timeout)\n");
+        return;
+    }
+    if (status != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "ping: network request failed (error %d)\n", status);
+        return;
+    }
+
+    uint32_t total_ms = 0;
+    uint32_t min_ms = 0xFFFFFFFF;
+    uint32_t max_ms = 0;
+    for (uint32_t i = 0; i < NET_PING_COUNT; i++) {
+        if (!(result.reply_mask & (1u << i)))
+            continue;
+        vga_printf("64 bytes from %s: icmp_seq=%u time=%u ms\n",
+                   args[1], i, result.rtt_ms[i]);
+        total_ms += result.rtt_ms[i];
+        if (result.rtt_ms[i] < min_ms)
+            min_ms = result.rtt_ms[i];
+        if (result.rtt_ms[i] > max_ms)
+            max_ms = result.rtt_ms[i];
+    }
+
+    vga_printf("\n--- ");
+    print_ipv4(destination);
+    vga_printf(" ping statistics ---\n%u packets transmitted, %u received, %u%% packet loss\n",
+               NET_PING_COUNT, result.received,
+               ((NET_PING_COUNT - result.received) * 100) / NET_PING_COUNT);
+    if (result.received)
+        vga_printf("rtt min/avg/max = %u/%u/%u ms\n",
+                   min_ms, total_ms / result.received, max_ms);
+}
+
 static void cmd_about() {
     vga_printf_colour(LIGHT_CYAN, BLACK, "========== ABOUT AegisOS ==========\n");
     vga_printf("A simple x86 OS written solely by ");
@@ -529,6 +667,9 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "touch")    == 0) cmd_touch();
     else if (strcmp(args[0], "exec")     == 0) cmd_exec();
     else if (strcmp(args[0], "rps")      == 0) cmd_rps();
+    else if (strcmp(args[0], "taskdemo") == 0) cmd_taskdemo();
+    else if (strcmp(args[0], "net")      == 0) cmd_net();
+    else if (strcmp(args[0], "ping")     == 0) cmd_ping();
 
     else if (strcmp(args[0], "atatest")     == 0) _cmd_atatest();
     else if (strcmp(args[0], "inodetest")   == 0) _cmd_inodetest();
@@ -555,7 +696,7 @@ void shell_init(multiboot_info_t *mbi) {
     print_prompt();
 }
 
-void shell_handle_key(char c) {
+static void process_key(char c) {
     if (c == '\n') {
         vga_putchar('\n');
         buf[buf_pos] = 0;
@@ -593,5 +734,22 @@ void shell_handle_key(char c) {
     } else if (buf_pos < BUFFER_SIZE - 1) {
         buf[buf_pos++] = c;
         vga_putchar(c);
+    }
+}
+
+void shell_handle_key(char c) {
+    uint32_t next = (key_write_index + 1) % KEY_QUEUE_SIZE;
+    if (next == key_read_index)
+        return;
+
+    key_queue[key_write_index] = c;
+    key_write_index = next;
+}
+
+void shell_process_input(void) {
+    while (key_read_index != key_write_index) {
+        char c = key_queue[key_read_index];
+        key_read_index = (key_read_index + 1) % KEY_QUEUE_SIZE;
+        process_key(c);
     }
 }

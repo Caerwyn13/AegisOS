@@ -2,6 +2,7 @@
 #include "idt.h"
 #include "pic.h"
 #include "serial.h"
+#include "task.h"
 
 static void (*handlers[16])(registers_t* regs);
 
@@ -10,11 +11,21 @@ void irq_register(int irq, void (*handler)(registers_t* regs)) {
 	pic_unmask(irq);
 }
 
-void irq_handler(registers_t* regs) {
+registers_t* irq_handler(registers_t* regs) {
+	if (regs->int_no == 0x81)
+		return task_schedule(regs);
+
+	if (regs->int_no < 32 || regs->int_no > 47)
+		return regs;
+
 	int irq = regs->int_no - 32;
 	if (handlers[irq])
 		handlers[irq](regs);
 	pic_eoi(irq);
+	if (irq == 0)
+		return task_schedule(regs);
+
+	return regs;
 }
 
 void irq_init() {
@@ -34,4 +45,5 @@ void irq_init() {
 	idt_set_entry(45, (uint32_t)irq13, 0x08, 0x8E);
 	idt_set_entry(46, (uint32_t)irq14, 0x08, 0x8E);
 	idt_set_entry(47, (uint32_t)irq15, 0x08, 0x8E);
+	idt_set_entry(0x81, (uint32_t)irq_scheduler, 0x08, 0x8E);
 }

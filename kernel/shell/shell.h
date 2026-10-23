@@ -8,5 +8,6 @@
 
 void shell_init(multiboot_info_t *mbi);
 void shell_handle_key(char c);
+void shell_process_input(void);
 
 #endif // SHELL_H

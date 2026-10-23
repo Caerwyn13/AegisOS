@@ -4,7 +4,7 @@ CD  := gcc
 LD  := ld
 
 ASMFLAGS := -f elf32
-CIMPS    := -Iinclude -Idrivers -Iports -Ikernel/acpi -Ikernel/cpu -Ikernel/mm -Ikernel/shell -Ikernel/lib -Ikernel/fs
+CIMPS    := -Iinclude -Idrivers -Iports -Ikernel/acpi -Ikernel/cpu -Ikernel/mm -Ikernel/shell -Ikernel/lib -Ikernel/fs -Ikernel/net
 CFLAGS   := -m32 -ffreestanding -fno-stack-protector -nostdlib -nodefaultlibs -Wall -Wextra ${CIMPS}
 ifeq ($(ACPI_TEST_NO_STORAGE),1)
 CFLAGS   += -DACPI_TEST_NO_STORAGE
@@ -58,6 +58,7 @@ run: $(ISO) disk.img
 	qemu-system-i386 -cdrom $(ISO) -serial mon:stdio \
 	-monitor telnet:localhost:4444,server,nowait \
 	-drive file=disk.img,format=raw,index=0,media=disk,cache=none \
+	-netdev user,id=net0 -device e1000,netdev=net0 \
 	-m 256M
 
 clean:

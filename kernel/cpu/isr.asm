@@ -108,6 +108,13 @@ IRQ 13, 45
 IRQ 14, 46
 IRQ 15, 47
 
+global irq_scheduler
+irq_scheduler:
+    cli
+    push dword 0
+    push dword 129
+    jmp irq_common
+
 extern irq_handler
 irq_common:
     pusha
@@ -120,7 +127,8 @@ irq_common:
     mov gs, ax
     push esp
     call irq_handler
-    pop eax
+    add esp, 4
+    mov esp, eax
     pop eax
     mov ds, ax
     mov es, ax
