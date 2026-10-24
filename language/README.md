@@ -80,13 +80,27 @@ Strings and variable names are limited to 127 and 31 characters respectively.
 ### `print`
 
 `print` displays a double-quoted string or a previously declared variable,
-followed by a newline:
+followed by a newline. In a quoted string, `{name}` is replaced by the value
+of the variable `name`:
 
 ```aegis
 print "Hello"
 print name
 print ratio
+print "Hello, {name}! Version {year}."
 ```
+
+Formatted placeholders accept any declared type. The braces must contain a
+single variable name; expressions and format specifiers are not supported.
+Use `{{` and `}}` to display literal braces:
+
+```aegis
+print "{{name}} is a placeholder example"
+```
+
+Formatted output is limited to 511 characters per `print` statement.
+Placeholders in string variable declarations are not expanded; interpolation
+currently applies to quoted strings passed directly to `print`.
 
 Supported escapes inside strings:
 

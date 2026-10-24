@@ -6,6 +6,7 @@
 #define SCRIPT_MAX_VARIABLES 32
 #define SCRIPT_NAME_SIZE     32
 #define SCRIPT_STRING_SIZE   128
+#define SCRIPT_FORMAT_SIZE   512
 
 typedef enum {
     VALUE_STRING,
@@ -33,6 +34,7 @@ typedef struct {
 
 static uint8_t script_buffer[FS_MAX_SIZE];
 static variable_t variables[SCRIPT_MAX_VARIABLES];
+static char formatted_output[SCRIPT_FORMAT_SIZE];
 static uint32_t variable_count;
 
 enum {
@@ -48,7 +50,9 @@ enum {
     PARSE_INVALID_NUMBER = -10,
     PARSE_DUPLICATE_VARIABLE = -11,
     PARSE_TOO_MANY_VARIABLES = -12,
-    PARSE_VALUE_TOO_LONG = -13
+    PARSE_VALUE_TOO_LONG = -13,
+    PARSE_INVALID_FORMAT = -14,
+    PARSE_OUTPUT_TOO_LONG = -15
 };
 
 static int is_space(char c) {
@@ -95,6 +99,139 @@ static int find_variable(const char *name) {
             return (int)i;
     }
     return -1;
+}
+
+static int append_char(char *output, uint32_t *length, char value) {
+    if (*length >= SCRIPT_FORMAT_SIZE - 1)
+        return -1;
+    output[(*length)++] = value;
+    output[*length] = '\0';
+    return 0;
+}
+
+static int append_text(char *output, uint32_t *length, const char *text) {
+    while (*text) {
+        if (append_char(output, length, *text++) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+static int append_unsigned(char *output, uint32_t *length, uint32_t value) {
+    char digits[10];
+    uint32_t count = 0;
+    do {
+        digits[count++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value);
+
+    while (count) {
+        if (append_char(output, length, digits[--count]) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+static int append_value(char *output, uint32_t *length,
+                        const value_t *value) {
+    switch (value->type) {
+        case VALUE_STRING:
+            return append_text(output, length, value->data.string);
+        case VALUE_INT: {
+            int32_t number = value->data.integer;
+            uint32_t magnitude = number < 0
+                ? (uint32_t)(-(number + 1)) + 1 : (uint32_t)number;
+            if (number < 0 && append_char(output, length, '-') != 0)
+                return -1;
+            return append_unsigned(output, length, magnitude);
+        }
+        case VALUE_FLOAT: {
+            int32_t number = value->data.float_milli;
+            uint32_t magnitude = number < 0
+                ? (uint32_t)(-(number + 1)) + 1 : (uint32_t)number;
+            if (number < 0 && append_char(output, length, '-') != 0)
+                return -1;
+            if (append_unsigned(output, length, magnitude / 1000) != 0 ||
+                append_char(output, length, '.') != 0)
+                return -1;
+            uint32_t fraction = magnitude % 1000;
+            if (append_char(output, length, (char)('0' + fraction / 100)) != 0 ||
+                append_char(output, length, (char)('0' + (fraction / 10) % 10)) != 0 ||
+                append_char(output, length, (char)('0' + fraction % 10)) != 0)
+                return -1;
+            return 0;
+        }
+        case VALUE_BOOL:
+            return append_text(output, length,
+                               value->data.boolean ? "true" : "false");
+        case VALUE_CHAR:
+            return append_char(output, length, value->data.character);
+    }
+    return -1;
+}
+
+static void print_text(const char *text) {
+    while (*text) {
+        vga_putchar(*text);
+        if (*text++ == '\n')
+            vga_putchar('\r');
+    }
+}
+
+static int format_string(const char *input, uint32_t *error_column) {
+    uint32_t output_length = 0;
+    formatted_output[0] = '\0';
+
+    for (uint32_t i = 0; input[i];) {
+        if (input[i] == '{' && input[i + 1] == '{') {
+            if (append_char(formatted_output, &output_length, '{') != 0)
+                return PARSE_OUTPUT_TOO_LONG;
+            i += 2;
+            continue;
+        }
+        if (input[i] == '}' && input[i + 1] == '}') {
+            if (append_char(formatted_output, &output_length, '}') != 0)
+                return PARSE_OUTPUT_TOO_LONG;
+            i += 2;
+            continue;
+        }
+        if (input[i] == '{') {
+            uint32_t name_start = i + 1;
+            uint32_t name_end = name_start;
+            while (input[name_end] && input[name_end] != '}')
+                name_end++;
+            if (!input[name_end] || name_end == name_start) {
+                *error_column = i + 1;
+                return PARSE_INVALID_FORMAT;
+            }
+
+            char name[SCRIPT_NAME_SIZE];
+            uint32_t name_index = name_start;
+            if (parse_name((const uint8_t *)input, name_end, &name_index,
+                           name, error_column) != 0 ||
+                name_index != name_end) {
+                *error_column = name_start + 1;
+                return PARSE_INVALID_FORMAT;
+            }
+            int variable = find_variable(name);
+            if (variable < 0) {
+                *error_column = name_start + 1;
+                return PARSE_UNKNOWN_VARIABLE;
+            }
+            if (append_value(formatted_output, &output_length,
+                             &variables[variable].value) != 0)
+                return PARSE_OUTPUT_TOO_LONG;
+            i = name_end + 1;
+            continue;
+        }
+        if (input[i] == '}') {
+            *error_column = i + 1;
+            return PARSE_INVALID_FORMAT;
+        }
+        if (append_char(formatted_output, &output_length, input[i++]) != 0)
+            return PARSE_OUTPUT_TOO_LONG;
+    }
+    return 0;
 }
 
 static int parse_escape(const uint8_t *line, uint32_t length, uint32_t *index,
@@ -361,10 +498,15 @@ static int parse_print(const uint8_t *line, uint32_t length, uint32_t index,
                        uint32_t *error_column) {
     value_t value;
     int status;
+    int formatted = 0;
     skip_space(line, length, &index);
     if (index < length && line[index] == '"') {
         status = parse_string_literal(line, length, &index, &value,
                                       error_column);
+        if (status == 0) {
+            status = format_string(value.data.string, error_column);
+            formatted = status == 0;
+        }
     } else {
         char name[SCRIPT_NAME_SIZE];
         if (parse_name(line, length, &index, name, error_column) != 0)
@@ -382,7 +524,12 @@ static int parse_print(const uint8_t *line, uint32_t length, uint32_t index,
     status = statement_end(line, length, index, error_column);
     if (status != 0)
         return status;
-    print_value(&value);
+    if (formatted) {
+        print_text(formatted_output);
+        vga_putchar('\n');
+    } else {
+        print_value(&value);
+    }
     return 1;
 }
 
@@ -469,6 +616,8 @@ static const char *parse_error_message(int status) {
         case PARSE_DUPLICATE_VARIABLE: return "variable is already declared";
         case PARSE_TOO_MANY_VARIABLES: return "variable limit reached";
         case PARSE_VALUE_TOO_LONG: return "string exceeds the 127 character limit";
+        case PARSE_INVALID_FORMAT: return "invalid formatted-string placeholder";
+        case PARSE_OUTPUT_TOO_LONG: return "formatted output exceeds 511 characters";
         default: return "invalid statement";
     }
 }
