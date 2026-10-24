@@ -10,6 +10,8 @@
 #define KEY_HOME    0x104
 #define KEY_END     0x105
 #define KEY_DELETE  0x106
+#define KEY_CTRL_S  0x107
+#define KEY_CTRL_Q  0x108
 
 void shell_init(multiboot_info_t *mbi);
 void shell_handle_key(uint16_t key);

@@ -9,9 +9,11 @@
 #define SCANCODE_CAPS  0x3A
 #define SCANCODE_LSHIFT 0x2A
 #define SCANCODE_RSHIFT 0x36
+#define SCANCODE_CTRL  0x1D
 
 static int caps_lock = 0;
 static int shift     = 0;
+static int ctrl      = 0;
 
 static const char scancode_map[] = {
     0,   0,  '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
@@ -52,6 +54,12 @@ static void keyboard_handler(registers_t *regs) {
     if (scancode == (SCANCODE_LSHIFT | 0x80) || scancode == (SCANCODE_RSHIFT | 0x80)) {
         shift = 0; return;
     }
+    if (scancode == SCANCODE_CTRL) {
+        ctrl = 1; extended = 0; return;
+    }
+    if (scancode == (SCANCODE_CTRL | 0x80)) {
+        ctrl = 0; extended = 0; return;
+    }
     if (scancode == SCANCODE_CAPS) {
         caps_lock = !caps_lock; return;
     }
@@ -60,6 +68,7 @@ static void keyboard_handler(registers_t *regs) {
 
     if (extended) {
         extended = 0;
+        if (scancode == SCANCODE_CTRL) { ctrl = 1; return; }
         if (scancode == 0x48) { shell_handle_key(ARROW_UP);   return; }
         if (scancode == 0x50) { shell_handle_key(ARROW_DOWN); return; }
         if (scancode == 0x4B) { shell_handle_key(ARROW_LEFT); return; }
@@ -71,6 +80,14 @@ static void keyboard_handler(registers_t *regs) {
     }
 
     if (scancode < sizeof(scancode_map)) {
+        if (ctrl && scancode == 0x1F) {
+            shell_handle_key(KEY_CTRL_S);
+            return;
+        }
+        if (ctrl && scancode == 0x10) {
+            shell_handle_key(KEY_CTRL_Q);
+            return;
+        }
         char c = shift ? scancode_map_shift[scancode] : scancode_map[scancode];
         if (c) {
             if (caps_lock && c >= 'a' && c <= 'z') c = apply_caps(c);

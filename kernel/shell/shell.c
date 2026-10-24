@@ -16,6 +16,7 @@
 #include "task.h"
 #include "serial.h"
 #include "net.h"
+#include "editor.h"
 
 #define BUFFER_SIZE     256
 #define HISTORY_SIZE    10
@@ -73,6 +74,7 @@ static const char *help_lines[] = {
     "  ls                     - list files",
     "  cat <file>             - read a file",
     "  write <file> <content> - write to a file",
+    "  edit <file>            - edit a text file",
     "  exec <file>            - execute an ELF binary",
     "  rm <file>              - delete a file",
     "  touch <file>           - create empty file",
@@ -105,11 +107,6 @@ static void print_section(const char *title) {
 
 static void print_success(const char *message) {
     vga_printf_colour(LIGHT_GREEN, BLACK, "[OK] ");
-    vga_printf("%s\n", message);
-}
-
-static void print_info(const char *message) {
-    vga_printf_colour(LIGHT_BLUE, BLACK, "[>] ");
     vga_printf("%s\n", message);
 }
 
@@ -371,6 +368,26 @@ static void cmd_write() {
     }
 }
 
+static void cmd_edit() {
+    if (argc != 2) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: edit <file>\n");
+        return;
+    }
+
+    int status = editor_start(args[1]);
+    if (status == -1)
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "edit: invalid filename (use up to %u letters, digits, '.', '_' or '-')\n",
+                          FS_MAX_NAME - 1);
+    else if (status == -2)
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "edit: failed to read %s\n", args[1]);
+    else if (status == -3)
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "edit: %s contains binary or unsupported characters\n",
+                          args[1]);
+}
+
 static void cmd_exec() {
     if (argc < 2) {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: exec <file>\n");
@@ -383,10 +400,6 @@ static void cmd_exec() {
         return;
     }
 
-    vga_printf_colour(LIGHT_CYAN, BLACK, "Entry point: ");
-    vga_printf_colour(LIGHT_GREEN, BLACK, "0x%x\n", entry);
-    print_info("Starting user mode");
-    
     enter_usermode(entry, USER_STACK_TOP);
     paging_unmap_range(0x00400000, 0x00410000);
     paging_unmap_range(USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_TOP);
@@ -1240,6 +1253,7 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "ls")       == 0) cmd_ls();
     else if (strcmp(args[0], "cat")      == 0) cmd_cat();
     else if (strcmp(args[0], "write")    == 0) cmd_write();
+    else if (strcmp(args[0], "edit")     == 0) cmd_edit();
     else if (strcmp(args[0], "rm")       == 0) cmd_rm();
     else if (strcmp(args[0], "touch")    == 0) cmd_touch();
     else if (strcmp(args[0], "exec")     == 0) cmd_exec();
@@ -1291,7 +1305,8 @@ static void process_key(uint16_t key) {
         buf[0] = '\0';
         history_index = history_count;
         history_browsing = 0;
-        print_prompt();
+        if (!editor_is_active())
+            print_prompt();
     } else if (key == '\b') {
         if (buf_cursor > 0) {
             for (uint32_t i = buf_cursor - 1; i < buf_length - 1; i++)
@@ -1352,6 +1367,12 @@ void shell_process_input(void) {
     while (key_read_index != key_write_index) {
         uint16_t key = key_queue[key_read_index];
         key_read_index = (key_read_index + 1) % KEY_QUEUE_SIZE;
-        process_key(key);
+        if (editor_is_active()) {
+            editor_handle_key(key);
+            if (!editor_is_active())
+                print_prompt();
+        } else {
+            process_key(key);
+        }
     }
 }

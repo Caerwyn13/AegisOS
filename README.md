@@ -53,6 +53,7 @@ A simple x86 operating system written in C and NASM assembly.
 | `ls` | List files on disk |
 | `cat <file>` | Read a file |
 | `write <file> <content>` | Write to a file |
+| `edit <file>` | Create or edit a text file |
 | `touch <file>` | Create an empty file |
 | `rm <file>` | Delete a file |
 | `exec <file>` | Execute an ELF binary |
@@ -67,6 +68,11 @@ removes the character before the cursor, Delete removes the character under
 the cursor, and Home/End move to the start or end. Up/Down cycle through the
 command history; pressing Down past the newest entry restores the line you were
 typing before browsing history.
+
+Use `edit <file>` to create or edit a text file in the built-in editor. Type
+normally, use the arrow keys to move, and press Ctrl+S to save or Ctrl+Q to
+quit. If there are unsaved changes, Ctrl+Q asks for confirmation; press it a
+second time to discard them, or Ctrl+S to save.
 
 ## Rock-Paper-Scissors
 
