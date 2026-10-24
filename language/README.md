@@ -45,8 +45,8 @@ ignored.
 
 ### Variables
 
-Declare a variable with `let`, a name, and a value. The value's type is
-inferred:
+Declare a variable with `let`, a name, and an expression. The expression's
+result type is inferred:
 
 ```aegis
 let name = "Aegis"
@@ -67,15 +67,51 @@ let initial: Char = 'A'
 ```
 
 The supported types are `String`, `Int`, `Float`, `Bool`, and `Char`.
-Type names are case-sensitive. An explicit type must match the literal's type.
+Type names are case-sensitive. An explicit type must match the expression's
+result type.
 Variable names begin with a letter or underscore and may then contain letters,
 digits, and underscores. A variable can only be declared once in a script.
-Variables exist only for the duration of one `run` command.
+The names `let`, `print`, `true`, and `false` are reserved. Variables exist
+only for the duration of one `run` command.
 
 `Int` values are signed 32-bit integers. `Float` values are stored as
 fixed-point numbers with up to three decimal places; they are not hardware
 floating-point values. A `Char` is exactly one character in single quotes.
 Strings and variable names are limited to 127 and 31 characters respectively.
+
+### Arithmetic and reassignment
+
+Numeric expressions support integer and fixed-point arithmetic, unary `+` and
+`-`, and parentheses:
+
+```aegis
+let width = 8
+let height = 3
+let area = width * height
+let half = area / 2.0
+let adjusted = (area + 4) * -2
+print "Area: {area}; half: {half}; adjusted: {adjusted}"
+```
+
+Operators follow conventional precedence: unary signs first, then `*` and `/`,
+then `+` and `-`; operators at the same level are evaluated left to right.
+Integer-only arithmetic produces an `Int`, and integer division truncates
+toward zero. If either operand is a `Float`, the operation produces a `Float`;
+integer operands are promoted to fixed-point. Float results are truncated
+toward zero to three fractional digits. Parentheses may be nested up to 32
+levels. Division by zero and arithmetic overflow stop the script with an error.
+
+Assign a new expression to an existing variable with `name = expression`.
+Reassignment keeps the variable's original type:
+
+```aegis
+let count = 1
+count = count + 1
+print count
+```
+
+The assigned expression must have the same type as the variable. Variables
+must be declared before they are used or reassigned.
 
 ### `print`
 
@@ -138,6 +174,4 @@ When a line is invalid, `run` reports the script filename, line, and column,
 then stops. The script is read from AegisFS and is limited to the filesystem's
 maximum file size of 32 KiB.
 
-This initial version does not support expressions, reassignment, conditions,
-loops, or user-defined functions. Values assigned to variables must be
-supported literals; variables can be printed but not yet used in expressions.
+Conditions, loops, and user-defined functions are not supported yet.

@@ -7,6 +7,7 @@
 #define SCRIPT_NAME_SIZE     32
 #define SCRIPT_STRING_SIZE   128
 #define SCRIPT_FORMAT_SIZE   512
+#define SCRIPT_MAX_EXPRESSION_DEPTH 32
 
 typedef enum {
     VALUE_STRING,
@@ -36,6 +37,7 @@ static uint8_t script_buffer[FS_MAX_SIZE];
 static variable_t variables[SCRIPT_MAX_VARIABLES];
 static char formatted_output[SCRIPT_FORMAT_SIZE];
 static uint32_t variable_count;
+static uint32_t expression_depth;
 
 enum {
     PARSE_INVALID_STATEMENT = -1,
@@ -52,7 +54,13 @@ enum {
     PARSE_TOO_MANY_VARIABLES = -12,
     PARSE_VALUE_TOO_LONG = -13,
     PARSE_INVALID_FORMAT = -14,
-    PARSE_OUTPUT_TOO_LONG = -15
+    PARSE_OUTPUT_TOO_LONG = -15,
+    PARSE_NON_NUMERIC = -16,
+    PARSE_DIVISION_BY_ZERO = -17,
+    PARSE_ARITHMETIC_OVERFLOW = -18,
+    PARSE_ASSIGNMENT_TYPE_MISMATCH = -19,
+    PARSE_RESERVED_NAME = -20,
+    PARSE_EXPRESSION_TOO_DEEP = -21
 };
 
 static int is_space(char c) {
@@ -70,6 +78,11 @@ static int is_name_start(char c) {
 
 static int is_name_char(char c) {
     return is_name_start(c) || (c >= '0' && c <= '9');
+}
+
+static int is_reserved_name(const char *name) {
+    return strcmp(name, "let") == 0 || strcmp(name, "print") == 0 ||
+           strcmp(name, "true") == 0 || strcmp(name, "false") == 0;
 }
 
 static int parse_name(const uint8_t *line, uint32_t length, uint32_t *index,
@@ -311,12 +324,6 @@ static int parse_char_literal(const uint8_t *line, uint32_t length,
 static int parse_number(const uint8_t *line, uint32_t length, uint32_t *index,
                         value_t *value, uint32_t *error_column) {
     uint32_t start = *index;
-    int negative = 0;
-    if (*index < length && (line[*index] == '-' || line[*index] == '+')) {
-        negative = line[*index] == '-';
-        (*index)++;
-    }
-
     uint32_t integer_part = 0;
     uint32_t integer_digits = 0;
     while (*index < length && line[*index] >= '0' && line[*index] <= '9') {
@@ -350,8 +357,7 @@ static int parse_number(const uint8_t *line, uint32_t length, uint32_t *index,
         }
     }
 
-    if (!integer_digits || (*index < length && !is_space((char)line[*index]) &&
-                            line[*index] != '#')) {
+    if (!integer_digits) {
         *error_column = *index + 1;
         return PARSE_INVALID_NUMBER;
     }
@@ -359,7 +365,7 @@ static int parse_number(const uint8_t *line, uint32_t length, uint32_t *index,
     if (is_float) {
         while (fractional_digits++ < 3)
             fractional_part *= 10;
-        uint32_t max_fraction = negative ? 648u : 647u;
+        uint32_t max_fraction = 647u;
         if (integer_part > 2147483u ||
             (integer_part == 2147483u && fractional_part > max_fraction)) {
             *error_column = start + 1;
@@ -367,59 +373,16 @@ static int parse_number(const uint8_t *line, uint32_t length, uint32_t *index,
         }
         uint32_t magnitude = integer_part * 1000 + fractional_part;
         value->type = VALUE_FLOAT;
-        if (negative)
-            value->data.float_milli = magnitude == 2147483648u
-                ? (int32_t)0x80000000u : -(int32_t)magnitude;
-        else
-            value->data.float_milli = (int32_t)magnitude;
+        value->data.float_milli = (int32_t)magnitude;
     } else {
-        if (integer_part > 2147483647u + (uint32_t)negative) {
+        if (integer_part > 2147483647u) {
             *error_column = start + 1;
             return PARSE_INVALID_NUMBER;
         }
         value->type = VALUE_INT;
-        if (negative)
-            value->data.integer = integer_part == 2147483648u
-                ? (int32_t)0x80000000u : -(int32_t)integer_part;
-        else
-            value->data.integer = (int32_t)integer_part;
+        value->data.integer = (int32_t)integer_part;
     }
     return 0;
-}
-
-static int parse_literal(const uint8_t *line, uint32_t length, uint32_t *index,
-                         value_t *value, uint32_t *error_column) {
-    memset(value, 0, sizeof(*value));
-    if (*index >= length) {
-        *error_column = *index + 1;
-        return PARSE_EXPECTED_VALUE;
-    }
-    if (line[*index] == '"')
-        return parse_string_literal(line, length, index, value, error_column);
-    if (line[*index] == '\'')
-        return parse_char_literal(line, length, index, value, error_column);
-    if ((line[*index] >= '0' && line[*index] <= '9') ||
-        line[*index] == '-' || line[*index] == '+')
-        return parse_number(line, length, index, value, error_column);
-
-    if (length - *index >= 4 && line[*index] == 't' &&
-        line[*index + 1] == 'r' && line[*index + 2] == 'u' &&
-        line[*index + 3] == 'e') {
-        *index += 4;
-        value->type = VALUE_BOOL;
-        value->data.boolean = 1;
-        return 0;
-    }
-    if (length - *index >= 5 && line[*index] == 'f' &&
-        line[*index + 1] == 'a' && line[*index + 2] == 'l' &&
-        line[*index + 3] == 's' && line[*index + 4] == 'e') {
-        *index += 5;
-        value->type = VALUE_BOOL;
-        value->data.boolean = 0;
-        return 0;
-    }
-    *error_column = *index + 1;
-    return PARSE_EXPECTED_VALUE;
 }
 
 static int parse_type_name(const uint8_t *line, uint32_t length,
@@ -443,6 +406,338 @@ static int parse_type_name(const uint8_t *line, uint32_t length,
         return PARSE_UNKNOWN_TYPE;
     }
     return 0;
+}
+
+static uint32_t magnitude_i32(int32_t value) {
+    return value < 0 ? (uint32_t)(-(value + 1)) + 1 : (uint32_t)value;
+}
+
+static int checked_add_i32(int32_t a, int32_t b, int32_t *result) {
+    if ((b > 0 && a > 2147483647 - b) ||
+        (b < 0 && a < (int32_t)0x80000000u - b))
+        return -1;
+    *result = a + b;
+    return 0;
+}
+
+static int checked_sub_i32(int32_t a, int32_t b, int32_t *result) {
+    if ((b < 0 && a > 2147483647 + b) ||
+        (b > 0 && a < (int32_t)0x80000000u + b))
+        return -1;
+    *result = a - b;
+    return 0;
+}
+
+static int checked_mul_i32(int32_t a, int32_t b, int32_t *result) {
+    if (!a || !b) {
+        *result = 0;
+        return 0;
+    }
+    uint32_t a_abs = magnitude_i32(a);
+    uint32_t b_abs = magnitude_i32(b);
+    uint32_t limit = ((a < 0) != (b < 0)) ? 2147483648u : 2147483647u;
+    if (a_abs > limit / b_abs)
+        return -1;
+    uint32_t product = a_abs * b_abs;
+    if (((a < 0) != (b < 0)) && product == 2147483648u)
+        *result = (int32_t)0x80000000u;
+    else
+        *result = ((a < 0) != (b < 0))
+            ? -(int32_t)product : (int32_t)product;
+    return 0;
+}
+
+static int checked_mul_small_div_1000(uint32_t small, uint32_t value,
+                                      uint32_t *result) {
+    uint32_t high = value / 1000;
+    uint32_t low = value % 1000;
+    if (small && high > 2147483647u / small)
+        return -1;
+    uint32_t whole = small * high;
+    uint32_t fraction = (small * low) / 1000;
+    if (whole > 2147483647u - fraction)
+        return -1;
+    *result = whole + fraction;
+    return 0;
+}
+
+static int float_multiply(int32_t a, int32_t b, int32_t *result) {
+    uint32_t a_abs = magnitude_i32(a);
+    uint32_t b_abs = magnitude_i32(b);
+    uint32_t whole_factor = a_abs / 1000;
+    uint32_t whole;
+    uint32_t fraction;
+    if (whole_factor && b_abs > 2147483647u / whole_factor)
+        return -1;
+    whole = whole_factor * b_abs;
+    if (checked_mul_small_div_1000(a_abs % 1000, b_abs, &fraction) != 0 ||
+        whole > 2147483647u - fraction)
+        return -1;
+
+    uint32_t product = whole + fraction;
+    int negative = (a < 0) != (b < 0);
+    if (product > (negative ? 2147483648u : 2147483647u))
+        return -1;
+    if (negative && product == 2147483648u)
+        *result = (int32_t)0x80000000u;
+    else
+        *result = negative ? -(int32_t)product : (int32_t)product;
+    return 0;
+}
+
+static int float_divide(int32_t a, int32_t b, int32_t *result) {
+    if (!b)
+        return PARSE_DIVISION_BY_ZERO;
+    uint32_t numerator = magnitude_i32(a);
+    uint32_t denominator = magnitude_i32(b);
+    uint32_t whole = numerator / denominator;
+    uint32_t remainder = numerator % denominator;
+    if (whole > 2147483u)
+        return -1;
+
+    uint32_t fraction = 0;
+    uint32_t remainder_accumulator = 0;
+    for (uint32_t i = 0; i < 1000; i++) {
+        if (remainder && remainder_accumulator >= denominator - remainder) {
+            remainder_accumulator -= denominator - remainder;
+            fraction++;
+        } else {
+            remainder_accumulator += remainder;
+        }
+    }
+
+    uint32_t magnitude = whole * 1000 + fraction;
+    int negative = (a < 0) != (b < 0);
+    if (magnitude > (negative ? 2147483648u : 2147483647u))
+        return -1;
+    if (negative && magnitude == 2147483648u)
+        *result = (int32_t)0x80000000u;
+    else
+        *result = negative ? -(int32_t)magnitude : (int32_t)magnitude;
+    return 0;
+}
+
+static int promote_numeric(value_t *value) {
+    if (value->type == VALUE_FLOAT)
+        return 0;
+    if (value->type != VALUE_INT)
+        return PARSE_NON_NUMERIC;
+    if (value->data.integer > 2147483 || value->data.integer < -2147483)
+        return PARSE_ARITHMETIC_OVERFLOW;
+    value->data.float_milli = value->data.integer * 1000;
+    value->type = VALUE_FLOAT;
+    return 0;
+}
+
+static int parse_expression_add(const uint8_t *line, uint32_t length,
+                                uint32_t *index, value_t *value,
+                                uint32_t *error_column);
+
+static int parse_expression_primary(const uint8_t *line, uint32_t length,
+                                   uint32_t *index, value_t *value,
+                                   uint32_t *error_column) {
+    skip_space(line, length, index);
+    memset(value, 0, sizeof(*value));
+    if (*index >= length) {
+        *error_column = *index + 1;
+        return PARSE_EXPECTED_VALUE;
+    }
+    if (line[*index] == '(') {
+        if (expression_depth >= SCRIPT_MAX_EXPRESSION_DEPTH) {
+            *error_column = *index + 1;
+            return PARSE_EXPRESSION_TOO_DEEP;
+        }
+        (*index)++;
+        expression_depth++;
+        int status = parse_expression_add(line, length, index, value,
+                                          error_column);
+        expression_depth--;
+        if (status != 0)
+            return status;
+        skip_space(line, length, index);
+        if (*index >= length || line[*index] != ')') {
+            *error_column = *index + 1;
+            return PARSE_EXPECTED_VALUE;
+        }
+        (*index)++;
+        return 0;
+    }
+    if (line[*index] == '"')
+        return parse_string_literal(line, length, index, value, error_column);
+    if (line[*index] == '\'')
+        return parse_char_literal(line, length, index, value, error_column);
+    if (line[*index] >= '0' && line[*index] <= '9')
+        return parse_number(line, length, index, value, error_column);
+
+    char name[SCRIPT_NAME_SIZE];
+    if (parse_name(line, length, index, name, error_column) != 0)
+        return PARSE_EXPECTED_VALUE;
+    if (strcmp(name, "true") == 0) {
+        value->type = VALUE_BOOL;
+        value->data.boolean = 1;
+        return 0;
+    }
+    if (strcmp(name, "false") == 0) {
+        value->type = VALUE_BOOL;
+        value->data.boolean = 0;
+        return 0;
+    }
+    int variable = find_variable(name);
+    if (variable < 0) {
+        *error_column = *index - strlen(name) + 1;
+        return PARSE_UNKNOWN_VARIABLE;
+    }
+    *value = variables[variable].value;
+    return 0;
+}
+
+static int parse_expression_unary(const uint8_t *line, uint32_t length,
+                                  uint32_t *index, value_t *value,
+                                  uint32_t *error_column) {
+    int negative = 0;
+    skip_space(line, length, index);
+    while (*index < length &&
+           (line[*index] == '+' || line[*index] == '-')) {
+        if (line[*index] == '-')
+            negative = !negative;
+        (*index)++;
+        skip_space(line, length, index);
+    }
+    int status = parse_expression_primary(line, length, index, value,
+                                          error_column);
+    if (status != 0 || !negative)
+        return status;
+    if (value->type == VALUE_INT) {
+        if (value->data.integer == (int32_t)0x80000000u)
+            return PARSE_ARITHMETIC_OVERFLOW;
+        value->data.integer = -value->data.integer;
+    } else if (value->type == VALUE_FLOAT) {
+        if (value->data.float_milli == (int32_t)0x80000000u)
+            return PARSE_ARITHMETIC_OVERFLOW;
+        value->data.float_milli = -value->data.float_milli;
+    } else {
+        return PARSE_NON_NUMERIC;
+    }
+    return 0;
+}
+
+static int apply_numeric_operator(value_t *left, value_t right, char op) {
+    if ((left->type != VALUE_INT && left->type != VALUE_FLOAT) ||
+        (right.type != VALUE_INT && right.type != VALUE_FLOAT))
+        return PARSE_NON_NUMERIC;
+
+    int status;
+    if (left->type == VALUE_FLOAT || right.type == VALUE_FLOAT) {
+        status = promote_numeric(left);
+        if (status != 0)
+            return status;
+        status = promote_numeric(&right);
+        if (status != 0)
+            return status;
+        int32_t result = 0;
+        if (op == '+')
+            status = checked_add_i32(left->data.float_milli,
+                                     right.data.float_milli, &result);
+        else if (op == '-')
+            status = checked_sub_i32(left->data.float_milli,
+                                     right.data.float_milli, &result);
+        else if (op == '*')
+            status = float_multiply(left->data.float_milli,
+                                    right.data.float_milli, &result);
+        else
+            status = float_divide(left->data.float_milli,
+                                  right.data.float_milli, &result);
+        if (status == PARSE_DIVISION_BY_ZERO)
+            return status;
+        if (status != 0)
+            return PARSE_ARITHMETIC_OVERFLOW;
+        left->type = VALUE_FLOAT;
+        left->data.float_milli = result;
+        return 0;
+    }
+
+    int32_t result = 0;
+    if (op == '+')
+        status = checked_add_i32(left->data.integer, right.data.integer, &result);
+    else if (op == '-')
+        status = checked_sub_i32(left->data.integer, right.data.integer, &result);
+    else if (op == '*')
+        status = checked_mul_i32(left->data.integer, right.data.integer, &result);
+    else {
+        if (!right.data.integer)
+            return PARSE_DIVISION_BY_ZERO;
+        if (left->data.integer == (int32_t)0x80000000u &&
+            right.data.integer == -1)
+            return PARSE_ARITHMETIC_OVERFLOW;
+        result = left->data.integer / right.data.integer;
+        left->type = VALUE_INT;
+        left->data.integer = result;
+        return 0;
+    }
+    if (status != 0)
+        return PARSE_ARITHMETIC_OVERFLOW;
+    left->data.integer = result;
+    return 0;
+}
+
+static int parse_expression_multiply(const uint8_t *line, uint32_t length,
+                                     uint32_t *index, value_t *value,
+                                     uint32_t *error_column) {
+    int status = parse_expression_unary(line, length, index, value,
+                                        error_column);
+    if (status != 0)
+        return status;
+    while (1) {
+        skip_space(line, length, index);
+        if (*index >= length ||
+            (line[*index] != '*' && line[*index] != '/'))
+            return 0;
+        uint32_t operator_column = *index + 1;
+        char op = (char)line[(*index)++];
+        value_t right;
+        status = parse_expression_unary(line, length, index, &right,
+                                        error_column);
+        if (status != 0)
+            return status;
+        status = apply_numeric_operator(value, right, op);
+        if (status != 0) {
+            *error_column = operator_column;
+            return status;
+        }
+    }
+}
+
+static int parse_expression_add(const uint8_t *line, uint32_t length,
+                                uint32_t *index, value_t *value,
+                                uint32_t *error_column) {
+    int status = parse_expression_multiply(line, length, index, value,
+                                           error_column);
+    if (status != 0)
+        return status;
+    while (1) {
+        skip_space(line, length, index);
+        if (*index >= length ||
+            (line[*index] != '+' && line[*index] != '-'))
+            return 0;
+        uint32_t operator_column = *index + 1;
+        char op = (char)line[(*index)++];
+        value_t right;
+        status = parse_expression_multiply(line, length, index, &right,
+                                           error_column);
+        if (status != 0)
+            return status;
+        status = apply_numeric_operator(value, right, op);
+        if (status != 0) {
+            *error_column = operator_column;
+            return status;
+        }
+    }
+}
+
+static int parse_expression(const uint8_t *line, uint32_t length,
+                            uint32_t *index, value_t *value,
+                            uint32_t *error_column) {
+    return parse_expression_add(line, length, index, value, error_column);
 }
 
 static void print_value(const value_t *value) {
@@ -538,6 +833,10 @@ static int parse_let(const uint8_t *line, uint32_t length, uint32_t index,
     char name[SCRIPT_NAME_SIZE];
     if (parse_name(line, length, &index, name, error_column) != 0)
         return PARSE_INVALID_NAME;
+    if (is_reserved_name(name)) {
+        *error_column = index - strlen(name) + 1;
+        return PARSE_RESERVED_NAME;
+    }
     if (find_variable(name) >= 0) {
         *error_column = index - strlen(name) + 1;
         return PARSE_DUPLICATE_VARIABLE;
@@ -564,7 +863,7 @@ static int parse_let(const uint8_t *line, uint32_t length, uint32_t index,
     skip_space(line, length, &index);
 
     value_t value;
-    int status = parse_literal(line, length, &index, &value, error_column);
+    int status = parse_expression(line, length, &index, &value, error_column);
     if (status != 0)
         return status;
     status = statement_end(line, length, index, error_column);
@@ -583,6 +882,36 @@ static int parse_let(const uint8_t *line, uint32_t length, uint32_t index,
     return 1;
 }
 
+static int parse_assignment(const uint8_t *line, uint32_t length,
+                            uint32_t index, const char *name,
+                            uint32_t *error_column) {
+    skip_space(line, length, &index);
+    if (index >= length || line[index] != '=') {
+        *error_column = index + 1;
+        return PARSE_INVALID_STATEMENT;
+    }
+    int variable = find_variable(name);
+    if (variable < 0) {
+        *error_column = 1;
+        return PARSE_UNKNOWN_VARIABLE;
+    }
+    uint32_t assignment_column = index + 1;
+    index++;
+    value_t value;
+    int status = parse_expression(line, length, &index, &value, error_column);
+    if (status != 0)
+        return status;
+    status = statement_end(line, length, index, error_column);
+    if (status != 0)
+        return status;
+    if (value.type != variables[variable].value.type) {
+        *error_column = assignment_column;
+        return PARSE_ASSIGNMENT_TYPE_MISMATCH;
+    }
+    variables[variable].value = value;
+    return 1;
+}
+
 static int parse_line(const uint8_t *line, uint32_t length,
                       uint32_t *error_column) {
     uint32_t index = 0;
@@ -598,8 +927,7 @@ static int parse_line(const uint8_t *line, uint32_t length,
         return parse_print(line, length, index, error_column);
     if (strcmp(keyword, "let") == 0)
         return parse_let(line, length, index, error_column);
-    *error_column = 1;
-    return PARSE_INVALID_STATEMENT;
+    return parse_assignment(line, length, index, keyword, error_column);
 }
 
 static const char *parse_error_message(int status) {
@@ -618,6 +946,12 @@ static const char *parse_error_message(int status) {
         case PARSE_VALUE_TOO_LONG: return "string exceeds the 127 character limit";
         case PARSE_INVALID_FORMAT: return "invalid formatted-string placeholder";
         case PARSE_OUTPUT_TOO_LONG: return "formatted output exceeds 511 characters";
+        case PARSE_NON_NUMERIC: return "arithmetic requires numeric values";
+        case PARSE_DIVISION_BY_ZERO: return "division by zero";
+        case PARSE_ARITHMETIC_OVERFLOW: return "arithmetic overflow";
+        case PARSE_ASSIGNMENT_TYPE_MISMATCH: return "assignment type does not match variable";
+        case PARSE_RESERVED_NAME: return "name is reserved by the language";
+        case PARSE_EXPRESSION_TOO_DEEP: return "expression nesting limit reached";
         default: return "invalid statement";
     }
 }
@@ -632,6 +966,7 @@ int script_run_file(const char *filename) {
 
     memset(variables, 0, sizeof(variables));
     variable_count = 0;
+    expression_depth = 0;
 
     uint32_t line_number = 1;
     uint32_t line_start = 0;
