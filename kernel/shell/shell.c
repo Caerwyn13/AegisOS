@@ -17,6 +17,7 @@
 #include "serial.h"
 #include "net.h"
 #include "editor.h"
+#include "script.h"
 
 #define BUFFER_SIZE     256
 #define HISTORY_SIZE    10
@@ -75,6 +76,7 @@ static const char *help_lines[] = {
     "  cat <file>             - read a file",
     "  write <file> <content> - write to a file",
     "  edit <file>            - edit a text file",
+    "  run <file>             - run an Aegis script",
     "  exec <file>            - execute an ELF binary",
     "  rm <file>              - delete a file",
     "  touch <file>           - create empty file",
@@ -386,6 +388,14 @@ static void cmd_edit() {
         vga_printf_colour(LIGHT_RED, BLACK,
                           "edit: %s contains binary or unsupported characters\n",
                           args[1]);
+}
+
+static void cmd_run() {
+    if (argc != 2) {
+        vga_printf_colour(LIGHT_RED, BLACK, "Usage: run <file>\n");
+        return;
+    }
+    script_run_file(args[1]);
 }
 
 static void cmd_exec() {
@@ -1254,6 +1264,7 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "cat")      == 0) cmd_cat();
     else if (strcmp(args[0], "write")    == 0) cmd_write();
     else if (strcmp(args[0], "edit")     == 0) cmd_edit();
+    else if (strcmp(args[0], "run")      == 0) cmd_run();
     else if (strcmp(args[0], "rm")       == 0) cmd_rm();
     else if (strcmp(args[0], "touch")    == 0) cmd_touch();
     else if (strcmp(args[0], "exec")     == 0) cmd_exec();

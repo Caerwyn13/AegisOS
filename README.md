@@ -54,6 +54,7 @@ A simple x86 operating system written in C and NASM assembly.
 | `cat <file>` | Read a file |
 | `write <file> <content>` | Write to a file |
 | `edit <file>` | Create or edit a text file |
+| `run <file>` | Run an Aegis language script |
 | `touch <file>` | Create an empty file |
 | `rm <file>` | Delete a file |
 | `exec <file>` | Execute an ELF binary |
@@ -73,6 +74,10 @@ Use `edit <file>` to create or edit a text file in the built-in editor. Type
 normally, use the arrow keys to move, and press Ctrl+S to save or Ctrl+Q to
 quit. If there are unsaved changes, Ctrl+Q asks for confirmation; press it a
 second time to discard them, or Ctrl+S to save.
+
+The first version of Aegis's built-in scripting language can print text from
+files stored in AegisFS. See the [language guide](./language/README.md) for its
+syntax and examples.
 
 ## Rock-Paper-Scissors
 
