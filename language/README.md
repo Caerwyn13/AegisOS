@@ -1,8 +1,9 @@
 # Aegis Scripting Language
 
 Aegis is a small interpreted language built into AegisOS. Scripts are saved as
-ordinary text files in AegisFS and run with the shell's `run` command. The first
-version supports printing text, blank lines, and comments.
+ordinary text files (often with the `.aeg` extension) in AegisFS and run with
+the shell's `run` command. The language supports variables, printing, blank
+lines, and comments.
 
 ## Quick start
 
@@ -19,6 +20,8 @@ shell:
 # My first Aegis program
 print "Hello from Aegis!"
 print "I am running inside AegisOS."
+let version = 1
+print version
 ```
 
 Run it:
@@ -32,6 +35,7 @@ The script prints:
 ```text
 Hello from Aegis!
 I am running inside AegisOS.
+1
 ```
 
 ## Syntax
@@ -39,12 +43,49 @@ I am running inside AegisOS.
 Each non-empty line contains one statement. Leading and trailing spaces are
 ignored.
 
+### Variables
+
+Declare a variable with `let`, a name, and a value. The value's type is
+inferred:
+
+```aegis
+let name = "Aegis"
+let year = 2026
+let ratio = 1.250
+let ready = true
+let initial = 'A'
+```
+
+You can also state the type explicitly:
+
+```aegis
+let name: String = "Aegis"
+let year: Int = 2026
+let ratio: Float = 1.250
+let ready: Bool = true
+let initial: Char = 'A'
+```
+
+The supported types are `String`, `Int`, `Float`, `Bool`, and `Char`.
+Type names are case-sensitive. An explicit type must match the literal's type.
+Variable names begin with a letter or underscore and may then contain letters,
+digits, and underscores. A variable can only be declared once in a script.
+Variables exist only for the duration of one `run` command.
+
+`Int` values are signed 32-bit integers. `Float` values are stored as
+fixed-point numbers with up to three decimal places; they are not hardware
+floating-point values. A `Char` is exactly one character in single quotes.
+Strings and variable names are limited to 127 and 31 characters respectively.
+
 ### `print`
 
-`print` displays a double-quoted string followed by a newline:
+`print` displays a double-quoted string or a previously declared variable,
+followed by a newline:
 
 ```aegis
 print "Hello"
+print name
+print ratio
 ```
 
 Supported escapes inside strings:
@@ -55,12 +96,14 @@ Supported escapes inside strings:
 | `\\` | Backslash |
 | `\n` | Newline |
 | `\t` | Tab |
+| `\'` | Single quote |
 
 For example:
 
 ```aegis
 print "She said: \"hello\""
 print "first line\nsecond line"
+print 'A'
 ```
 
 ### Comments
@@ -81,5 +124,6 @@ When a line is invalid, `run` reports the script filename, line, and column,
 then stops. The script is read from AegisFS and is limited to the filesystem's
 maximum file size of 32 KiB.
 
-This initial version has no variables, expressions, conditions, loops, or
-user-defined functions yet.
+This initial version does not support expressions, reassignment, conditions,
+loops, or user-defined functions. Values assigned to variables must be
+supported literals; variables can be printed but not yet used in expressions.
