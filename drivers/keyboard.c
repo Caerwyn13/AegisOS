@@ -10,6 +10,7 @@
 #define SCANCODE_LSHIFT 0x2A
 #define SCANCODE_RSHIFT 0x36
 #define SCANCODE_CTRL  0x1D
+#define SCANCODE_UK_BACKSLASH 0x56
 
 static int caps_lock = 0;
 static int shift     = 0;
@@ -94,6 +95,10 @@ static void keyboard_handler(registers_t *regs) {
             else if (caps_lock && shift && c >= 'A' && c <= 'Z') c = apply_caps(c);
             shell_handle_key(c);
         }
+    }
+
+    if (scancode == SCANCODE_UK_BACKSLASH) {
+        shell_handle_key(shift ? '|' : '\\');
     }
 }
 
