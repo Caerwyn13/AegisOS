@@ -15,7 +15,7 @@
 #include "acpi.h"
 #include "task.h"
 #include "serial.h"
-#include "net.h"
+#include "../net/net.h"
 #include "editor.h"
 #include "script.h"
 
