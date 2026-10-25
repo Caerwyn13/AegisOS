@@ -75,9 +75,9 @@ normally, use the arrow keys to move, and press Ctrl+S to save or Ctrl+Q to
 quit. If there are unsaved changes, Ctrl+Q asks for confirmation; press it a
 second time to discard them, or Ctrl+S to save.
 
-The first version of Aegis's built-in scripting language can print text from
-files stored in AegisFS. See the [language guide](./language/README.md) for its
-syntax and examples.
+Aegis's built-in scripting language supports variables, arithmetic, formatted
+printing, conditionals, and `while` loops. Scripts run from files stored in
+AegisFS; see the [language guide](./language/README.md) for syntax and examples.
 
 ## Rock-Paper-Scissors
 
@@ -204,9 +204,19 @@ exec hello.elf
 AegisOS/
 ├── boot/
 │   └── grub.cfg
+├── drivers/
+│   ├── ata.c / ata.h
+│   ├── e1000.c / e1000.h
+│   ├── keyboard.c / keyboard.h
+│   ├── ports.c / ports.h
+│   ├── rtc.c / rtc.h
+│   ├── serial.c / serial.h
+│   └── vga.c / vga.h
 ├── kernel/
 │   ├── boot.asm
 │   ├── kernel.c
+│   ├── acpi/
+│   │   └── acpi.c / acpi.h
 │   ├── cpu/
 │   │   ├── gdt.c / gdt.h
 │   │   ├── gdt_flush.asm
@@ -216,30 +226,34 @@ AegisOS/
 │   │   ├── irq.c / irq.h
 │   │   ├── pic.c / pic.h
 │   │   ├── pit.c / pit.h
-│   │   └── syscall.c / syscall.h
-│   ├── drivers/
-│   │   ├── vga.c / vga.h
-│   │   ├── keyboard.c / keyboard.h
-│   │   ├── serial.c / serial.h
-│   │   ├── ata.c / ata.h
-│   │   └── rtc.c / rtc.h
-│   ├── mm/
-│   │   ├── pmm.c / pmm.h
-│   │   ├── paging.c / paging.h
-│   │   └── heap.c / heap.h
+│   │   ├── syscall.c
+│   │   ├── task.c / task.h
+│   │   └── usermode.asm / usermode.h
 │   ├── fs/
 │   │   ├── aegisfs.c / aegisfs.h
 │   │   └── elf.c / elf.h
 │   ├── lib/
 │   │   └── string.c / string.h
+│   ├── mm/
+│   │   ├── pmm.c / pmm.h
+│   │   ├── paging.c / paging.h
+│   │   └── heap.c / heap.h
+│   ├── net/
+│   │   └── net.c / net.h
 │   └── shell/
+│       ├── editor.c / editor.h
+│       ├── script.c / script.h
 │       └── shell.c / shell.h
 ├── include/
 │   ├── types.h
 │   ├── stdarg.h
-│   └── multiboot.h
+│   ├── multiboot.h
+│   ├── random.c / random.h
+│   └── syscall.h
+├── language/
+│   └── README.md
 ├── tools/
-│   └── diskwrite.c
+│   └── diskwrite
 ├── linker.ld
 └── Makefile
 ```

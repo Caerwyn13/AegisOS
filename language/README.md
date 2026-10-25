@@ -2,8 +2,8 @@
 
 Aegis is a small interpreted language built into AegisOS. Scripts are saved as
 ordinary text files (often with the `.aeg` extension) in AegisFS and run with
-the shell's `run` command. The language supports variables, printing, blank
-lines, comments, and conditional `if`/`else` blocks.
+the shell's `run` command. The language supports variables, arithmetic,
+printing, comments, conditional `if`/`else` blocks, and `while` loops.
 
 ## Quick start
 
@@ -71,8 +71,8 @@ Type names are case-sensitive. An explicit type must match the expression's
 result type.
 Variable names begin with a letter or underscore and may then contain letters,
 digits, and underscores. A variable can only be declared once in a script.
-The names `let`, `print`, `true`, `false`, `if`, `else`, and `end` are
-reserved. Variables exist only for the duration of one `run` command.
+The names `let`, `print`, `true`, `false`, `if`, `else`, `while`, and `end`
+are reserved. Variables exist only for the duration of one `run` command.
 
 `Int` values are signed 32-bit integers. `Float` values are stored as
 fixed-point numbers with up to three decimal places; they are not hardware
@@ -136,6 +136,28 @@ error. A conditional block may contain another conditional block; nesting is
 limited to 32 levels. Each `if` must end with `end`, and may have at most one
 `else`. Statements in the unselected branch are skipped.
 
+### `while` loops
+
+Use `while` with a condition and close the loop with `end`. The condition is
+checked before each iteration:
+
+```aegis
+let count = 1
+while count <= 5
+    print count
+    count = count + 1
+end
+```
+
+Loops can be nested with other loops and conditional blocks, up to the same
+32-level block-nesting limit. Each `while` must have a matching `end`.
+Variables are script-scoped rather than block-scoped, so declare a loop
+variable once before the loop and update it inside the loop.
+Execution is limited to 10,000 processed script lines per `run` command,
+counting blank lines, comments, skipped branches, and lines processed again
+by loops. If the limit is reached, the script stops with an error; this also
+prevents a non-terminating loop from hanging the system.
+
 ### `print`
 
 `print` displays a double-quoted string or a previously declared variable,
@@ -197,4 +219,4 @@ When a line is invalid, `run` reports the script filename, line, and column,
 then stops. The script is read from AegisFS and is limited to the filesystem's
 maximum file size of 32 KiB.
 
-Loops and user-defined functions are not supported yet.
+User-defined functions are not supported yet.

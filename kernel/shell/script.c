@@ -9,6 +9,8 @@
 #define SCRIPT_FORMAT_SIZE   512
 #define SCRIPT_MAX_EXPRESSION_DEPTH 32
 #define SCRIPT_MAX_BLOCK_DEPTH 32
+#define SCRIPT_MAX_EXECUTED_LINES 10000
+#define SCRIPT_NO_JUMP 0xFFFFFFFFu
 
 typedef enum {
     VALUE_STRING,
@@ -17,6 +19,11 @@ typedef enum {
     VALUE_BOOL,
     VALUE_CHAR
 } value_type_t;
+
+typedef enum {
+    BLOCK_IF,
+    BLOCK_WHILE
+} block_type_t;
 
 typedef struct {
     value_type_t type;
@@ -35,10 +42,16 @@ typedef struct {
 } variable_t;
 
 typedef struct {
+    block_type_t type;
     int parent_active;
     int condition;
     int has_else;
-} conditional_block_t;
+    uint32_t condition_offset;
+    uint32_t condition_length;
+    uint32_t body_offset;
+    uint32_t body_line_number;
+    uint32_t while_line_number;
+} script_block_t;
 
 static uint8_t script_buffer[FS_MAX_SIZE];
 static variable_t variables[SCRIPT_MAX_VARIABLES];
@@ -73,7 +86,8 @@ enum {
     PARSE_INVALID_BLOCK = -24,
     PARSE_BLOCK_TOO_DEEP = -25,
     PARSE_UNCLOSED_BLOCK = -26,
-    PARSE_COMPARISON_TYPE_MISMATCH = -27
+    PARSE_COMPARISON_TYPE_MISMATCH = -27,
+    PARSE_EXECUTION_LIMIT = -28
 };
 
 static int is_space(char c) {
@@ -97,7 +111,7 @@ static int is_reserved_name(const char *name) {
     return strcmp(name, "let") == 0 || strcmp(name, "print") == 0 ||
            strcmp(name, "true") == 0 || strcmp(name, "false") == 0 ||
            strcmp(name, "if") == 0 || strcmp(name, "else") == 0 ||
-           strcmp(name, "end") == 0;
+           strcmp(name, "end") == 0 || strcmp(name, "while") == 0;
 }
 
 static int parse_name(const uint8_t *line, uint32_t length, uint32_t *index,
@@ -1064,8 +1078,11 @@ static int parse_assignment(const uint8_t *line, uint32_t length,
 }
 
 static int parse_line(const uint8_t *line, uint32_t length,
-                      conditional_block_t blocks[], uint32_t *block_depth,
-                      int *active, uint32_t *error_column) {
+                      uint32_t line_offset, uint32_t line_number,
+                      uint32_t next_line_offset, uint32_t next_line_number,
+                      script_block_t blocks[], uint32_t *block_depth,
+                      int *active, uint32_t *jump_offset,
+                      uint32_t *error_line, uint32_t *error_column) {
     uint32_t index = 0;
     skip_space(line, length, &index);
     if (index == length || line[index] == '#')
@@ -1082,10 +1099,37 @@ static int parse_line(const uint8_t *line, uint32_t length,
             *error_column = 1;
             return PARSE_BLOCK_TOO_DEEP;
         }
-        conditional_block_t *block = &blocks[*block_depth];
+        script_block_t *block = &blocks[*block_depth];
+        block->type = BLOCK_IF;
         block->parent_active = *active;
         block->has_else = 0;
         block->condition = 0;
+        if (block->parent_active) {
+            int status = parse_condition(line, length, index,
+                                         &block->condition, error_column);
+            if (status != 0)
+                return status;
+        }
+        (*block_depth)++;
+        *active = block->parent_active && block->condition;
+        return 0;
+    }
+
+    if (strcmp(keyword, "while") == 0) {
+        if (*block_depth >= SCRIPT_MAX_BLOCK_DEPTH) {
+            *error_column = 1;
+            return PARSE_BLOCK_TOO_DEEP;
+        }
+        script_block_t *block = &blocks[*block_depth];
+        block->type = BLOCK_WHILE;
+        block->parent_active = *active;
+        block->has_else = 0;
+        block->condition = 0;
+        block->condition_offset = line_offset + index;
+        block->condition_length = length - index;
+        block->body_offset = next_line_offset;
+        block->body_line_number = next_line_number;
+        block->while_line_number = line_number;
         if (block->parent_active) {
             int status = parse_condition(line, length, index,
                                          &block->condition, error_column);
@@ -1105,8 +1149,8 @@ static int parse_line(const uint8_t *line, uint32_t length,
         int status = statement_end(line, length, index, error_column);
         if (status != 0)
             return status;
-        conditional_block_t *block = &blocks[*block_depth - 1];
-        if (block->has_else) {
+        script_block_t *block = &blocks[*block_depth - 1];
+        if (block->type != BLOCK_IF || block->has_else) {
             *error_column = 1;
             return PARSE_INVALID_BLOCK;
         }
@@ -1123,8 +1167,26 @@ static int parse_line(const uint8_t *line, uint32_t length,
         int status = statement_end(line, length, index, error_column);
         if (status != 0)
             return status;
+        script_block_t *block = &blocks[*block_depth - 1];
+        if (block->type == BLOCK_WHILE && block->parent_active) {
+            int condition;
+            status = parse_condition(script_buffer + block->condition_offset,
+                                     block->condition_length, 0, &condition,
+                                     error_column);
+            if (status != 0) {
+                *error_line = block->while_line_number;
+                return status;
+            }
+            if (condition) {
+                block->condition = 1;
+                *active = 1;
+                *jump_offset = block->body_offset;
+                *error_line = block->body_line_number;
+                return 0;
+            }
+        }
         (*block_depth)--;
-        *active = blocks[*block_depth].parent_active;
+        *active = block->parent_active;
         return 0;
     }
 
@@ -1166,6 +1228,7 @@ static const char *parse_error_message(int status) {
         case PARSE_INVALID_BLOCK: return "unexpected or duplicate else/end";
         case PARSE_BLOCK_TOO_DEEP: return "conditional nesting limit reached";
         case PARSE_UNCLOSED_BLOCK: return "conditional block is missing end";
+        case PARSE_EXECUTION_LIMIT: return "script execution limit reached";
         default: return "invalid statement";
     }
 }
@@ -1182,30 +1245,51 @@ int script_run_file(const char *filename) {
     variable_count = 0;
     expression_depth = 0;
 
-    conditional_block_t blocks[SCRIPT_MAX_BLOCK_DEPTH];
+    script_block_t blocks[SCRIPT_MAX_BLOCK_DEPTH];
     uint32_t block_depth = 0;
     int active = 1;
     uint32_t line_number = 1;
     uint32_t line_start = 0;
+    uint32_t executed_lines = 0;
     while (line_start < size) {
         uint32_t line_end = line_start;
         while (line_end < size && script_buffer[line_end] != '\n')
             line_end++;
 
+        if (executed_lines >= SCRIPT_MAX_EXECUTED_LINES) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "run: %s:%u:1: %s\n",
+                              filename, line_number,
+                              parse_error_message(PARSE_EXECUTION_LIMIT));
+            return -1;
+        }
+        executed_lines++;
+
+        uint32_t next_line_start = line_end + (line_end < size ? 1 : 0);
+        uint32_t next_line_number = line_number + 1;
+        uint32_t jump_offset = SCRIPT_NO_JUMP;
+        uint32_t error_line = line_number;
         uint32_t error_column = 0;
         int status = parse_line(script_buffer + line_start,
-                                line_end - line_start, blocks, &block_depth,
-                                &active, &error_column);
+                                line_end - line_start, line_start, line_number,
+                                next_line_start, next_line_number, blocks,
+                                &block_depth, &active, &jump_offset,
+                                &error_line, &error_column);
         if (status < 0) {
             vga_printf_colour(LIGHT_RED, BLACK,
                               "run: %s:%u:%u: %s\n",
-                              filename, line_number, error_column,
+                              filename, error_line, error_column,
                               parse_error_message(status));
             return -1;
         }
 
-        line_start = line_end + (line_end < size ? 1 : 0);
-        line_number++;
+        if (jump_offset != SCRIPT_NO_JUMP) {
+            line_start = jump_offset;
+            line_number = error_line;
+        } else {
+            line_start = next_line_start;
+            line_number = next_line_number;
+        }
     }
     if (block_depth) {
         vga_printf_colour(LIGHT_RED, BLACK,
