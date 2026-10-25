@@ -410,8 +410,7 @@ static void cmd_exec() {
     }
 
     enter_usermode(entry, USER_STACK_TOP);
-    paging_unmap_range(0x00400000, 0x00410000);
-    paging_unmap_range(USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_TOP);
+    elf_unload();
 }
 
 static void cmd_rm() {

@@ -94,6 +94,12 @@ enum elf_phdr_type {
     PT_LOAD = 1,
 };
 
+enum elf_program_flags {
+    PF_X = 1,
+    PF_W = 2,
+    PF_R = 4,
+};
+
 // ============================================================
 // User process layout
 // ============================================================
@@ -108,5 +114,6 @@ enum elf_phdr_type {
 int  elf_check_file(elf32_ehdr *hdr);
 int  elf_check_supported(elf32_ehdr *hdr);
 int  elf_load(const char *name, uint32_t *entry);
+void elf_unload(void);
 
 #endif

@@ -156,7 +156,15 @@ size.
 
 ### Writing Userspace Programs
 
-Programs must be compiled as static 32-bit ELF executables with no standard library:
+Programs must be compiled as static 32-bit ELF executables with no standard
+library. `exec` supports ELF32 little-endian i386 `ET_EXEC` files. Loadable
+segments must fit in the user image region below the kernel heap, must not
+overlap, and the entry point must belong to an executable segment. Relocatable
+objects and dynamically linked executables are not supported.
+`exec` supports ELF32 little-endian i386 `ET_EXEC` files. Loadable segments must
+fit in the user image region below the kernel heap, must not overlap, and the
+entry point must belong to an executable segment. Relocatable objects and
+dynamically linked executables are not supported.
 
 ```c
 void _start() {

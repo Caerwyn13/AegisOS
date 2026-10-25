@@ -7,10 +7,18 @@
 #include "string.h"
 
 #define USER_ELF_MIN_VADDR 0x00400000
+#define USER_ELF_MAX_SEGMENTS 16
+#define USER_ELF_STACK_BOTTOM (USER_STACK_TOP - USER_STACK_SIZE)
 
-// ============================================================
-// Validation
-// ============================================================
+typedef struct {
+    uint32_t start;
+    uint32_t end;
+} elf_mapped_range_t;
+
+static elf_mapped_range_t loaded_segments[USER_ELF_MAX_SEGMENTS];
+static uint32_t loaded_segment_count;
+static int stack_mapping_attempted;
+
 int elf_check_file(elf32_ehdr *hdr) {
     if (!hdr) return 0;
     return hdr->e_ident[EI_MAG0] == ELFMAG0 &&
@@ -24,99 +32,192 @@ int elf_check_supported(elf32_ehdr *hdr) {
     return hdr->e_ident[EI_CLASS] == ELFCLASS32 &&
            hdr->e_ident[EI_DATA] == ELFDATA2LSB &&
            hdr->e_ident[EI_VERSION] == EV_CURRENT &&
+           hdr->e_version == EV_CURRENT &&
            hdr->e_machine == EM_386 &&
-           (hdr->e_type == ET_REL || hdr->e_type == ET_EXEC);
+           hdr->e_type == ET_EXEC;
 }
 
-// ============================================================
-// Loader
-// ============================================================
+void elf_unload(void) {
+    for (uint32_t i = 0; i < loaded_segment_count; i++)
+        paging_unmap_range(loaded_segments[i].start, loaded_segments[i].end);
+    if (stack_mapping_attempted)
+        paging_unmap_range(USER_ELF_STACK_BOTTOM, USER_STACK_TOP);
+    memset(loaded_segments, 0, sizeof(loaded_segments));
+    loaded_segment_count = 0;
+    stack_mapping_attempted = 0;
+}
+
+static int validate_header(const elf32_ehdr *hdr, uint32_t size) {
+    if (size < sizeof(*hdr) || hdr->e_ehsize != sizeof(*hdr) ||
+        hdr->e_phentsize != sizeof(elf32_phdr) || !hdr->e_phnum)
+        return -1;
+    if (hdr->e_phoff > size ||
+        hdr->e_phnum > (size - hdr->e_phoff) / hdr->e_phentsize)
+        return -1;
+    return 0;
+}
+
+static const elf32_phdr *program_header(const uint8_t *buffer,
+                                         const elf32_ehdr *header,
+                                         uint32_t index) {
+    return (const elf32_phdr *)(buffer + header->e_phoff +
+                                index * header->e_phentsize);
+}
+
+static int validate_load_segment(const elf32_phdr *segment, uint32_t size,
+                                 uint32_t *map_start, uint32_t *map_end) {
+    if (segment->p_filesz > segment->p_memsz ||
+        segment->p_offset > size ||
+        segment->p_filesz > size - segment->p_offset ||
+        segment->p_memsz > 0xFFFFFFFFu - segment->p_vaddr)
+        return -1;
+    if (!segment->p_memsz) {
+        *map_start = 0;
+        *map_end = 0;
+        return 0;
+    }
+
+    uint32_t segment_end = segment->p_vaddr + segment->p_memsz;
+    if (segment_end <= USER_ELF_MIN_VADDR) {
+        *map_start = 0;
+        *map_end = 0;
+        return 0;
+    }
+    if (segment->p_vaddr < USER_ELF_MIN_VADDR || segment_end > HEAP_START)
+        return -1;
+
+    *map_start = segment->p_vaddr & ~(PAGE_SIZE - 1);
+    *map_end = (segment_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (*map_end < segment_end)
+        return -1;
+    return 0;
+}
+
+static int ranges_overlap(uint32_t start, uint32_t end,
+                          uint32_t other_start, uint32_t other_end) {
+    return start < other_end && other_start < end;
+}
+
+static int load_segment(const elf32_phdr *segment, uint8_t *buffer,
+                        uint32_t map_start, uint32_t map_end) {
+    int writable = (segment->p_flags & PF_W) != 0;
+    if (paging_map_user_range(map_start, map_end, writable) != 0)
+        return -1;
+
+    uint32_t file_end = segment->p_vaddr + segment->p_filesz;
+    for (uint32_t page = map_start; page < map_end; page += PAGE_SIZE) {
+        if (!paging_get_phys(page))
+            return -1;
+        memset((void *)page, 0, PAGE_SIZE);
+
+        uint32_t copy_start = page > segment->p_vaddr
+            ? page : segment->p_vaddr;
+        uint32_t copy_end = page + PAGE_SIZE < file_end
+            ? page + PAGE_SIZE : file_end;
+        if (copy_end > copy_start) {
+            uint32_t file_offset = segment->p_offset +
+                                   (copy_start - segment->p_vaddr);
+            memcpy((void *)copy_start, buffer + file_offset,
+                   copy_end - copy_start);
+        }
+    }
+    return 0;
+}
+
 int elf_load(const char *name, uint32_t *entry_out) {
-    uint8_t *buf = (uint8_t*)kmalloc(FS_MAX_SIZE);
-    if (!buf) {
+    if (!name || !entry_out) {
+        vga_printf_colour(LIGHT_RED, BLACK, "ELF: invalid loader arguments\n");
+        return -1;
+    }
+
+    elf_unload();
+    uint8_t *buffer = (uint8_t *)kmalloc(FS_MAX_SIZE);
+    if (!buffer) {
         vga_printf_colour(LIGHT_RED, BLACK, "ELF: out of memory for buffer\n");
         return -1;
     }
 
     uint32_t size = 0;
-    if (fs_read(name, buf, &size) < 0) {
+    if (fs_read(name, buffer, &size) < 0) {
         vga_printf_colour(LIGHT_RED, BLACK, "ELF: file not found: %s\n", name);
-        kfree(buf);
+        kfree(buffer);
         return -1;
     }
 
-    elf32_ehdr *hdr = (elf32_ehdr*)buf;
-    if (!elf_check_supported(hdr)) {
-        vga_printf_colour(LIGHT_RED, BLACK, "ELF: unsupported file\n");
-        kfree(buf);
+    elf32_ehdr *header = (elf32_ehdr *)buffer;
+    if (size > FS_MAX_SIZE || size < sizeof(*header) ||
+        !elf_check_supported(header) || validate_header(header, size) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "ELF: invalid or unsupported executable\n");
+        kfree(buffer);
         return -1;
     }
 
-    // =============================
-    // Step 1: Map all PT_LOAD segments
-    // =============================
-    for (int i = 0; i < hdr->e_phnum; i++) {
-        elf32_phdr *ph = (elf32_phdr*)(buf + hdr->e_phoff + i * hdr->e_phentsize);
-        if (ph->p_type != PT_LOAD || ph->p_memsz == 0) continue;
-
-        uint32_t seg_start = ph->p_vaddr & ~0xFFF;
-        uint32_t seg_end   = (ph->p_vaddr + ph->p_memsz + 0xFFF) & ~0xFFF;
-        int writable = (ph->p_flags & 0x2) != 0;
-        
-        if (seg_end <= USER_ELF_MIN_VADDR) {
+    int entry_executable = 0;
+    for (uint32_t i = 0; i < header->e_phnum; i++) {
+        const elf32_phdr *segment = program_header(buffer, header, i);
+        if (segment->p_type != PT_LOAD)
             continue;
-        }
 
-        if (seg_start < USER_ELF_MIN_VADDR) {
-            seg_start = USER_ELF_MIN_VADDR;
+        uint32_t map_start;
+        uint32_t map_end;
+        if (validate_load_segment(segment, size, &map_start, &map_end) != 0) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "ELF: invalid load segment\n");
+            goto fail;
         }
-
-        if (paging_map_user_range(seg_start, seg_end, writable) != 0) {
-            vga_printf_colour(LIGHT_RED, BLACK, "ELF: PMM out of memory mapping segment\n");
-            kfree(buf);
-            return -1;
+        if (!segment->p_memsz || map_start == map_end)
+            continue;
+        if (loaded_segment_count >= USER_ELF_MAX_SEGMENTS) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "ELF: too many load segments\n");
+            goto fail;
         }
-
-        // Copy initialized data
-        for (uint32_t v = seg_start; v < seg_end; v += PAGE_SIZE) {
-            if (!paging_get_phys(v)) {
-                vga_printf_colour(LIGHT_RED, BLACK, "ELF: missing physical page at 0x%x\n", v);
-                kfree(buf);
-                return -1;
+        for (uint32_t j = 0; j < loaded_segment_count; j++) {
+            if (ranges_overlap(map_start, map_end,
+                               loaded_segments[j].start,
+                               loaded_segments[j].end)) {
+                vga_printf_colour(LIGHT_RED, BLACK,
+                                  "ELF: overlapping load segments\n");
+                goto fail;
             }
+        }
 
-            uint32_t page_file_start = 0;
-            uint32_t page_file_end = PAGE_SIZE;
+        loaded_segments[loaded_segment_count].start = map_start;
+        loaded_segments[loaded_segment_count].end = map_end;
+        loaded_segment_count++;
 
-            if (v < ph->p_vaddr) page_file_start = ph->p_vaddr - v;
-            if (v + PAGE_SIZE > ph->p_vaddr + ph->p_filesz)
-                page_file_end = (ph->p_vaddr + ph->p_filesz > v) ? ph->p_filesz - (v - ph->p_vaddr) : 0;
+        if ((segment->p_flags & PF_X) &&
+            header->e_entry >= segment->p_vaddr &&
+            header->e_entry < segment->p_vaddr + segment->p_memsz)
+            entry_executable = 1;
 
-            // Copy file data via the mapped virtual address, not the physical one.
-            if (page_file_end > page_file_start) {
-                uint32_t file_offset = ph->p_offset + (v - seg_start) + page_file_start;
-                memcpy((void*)(v + page_file_start), buf + file_offset,
-                       page_file_end - page_file_start);
-            }
-
-            // Zero BSS through the virtual mapping too.
-            uint32_t bss_start = v + page_file_end;
-            uint32_t bss_end = v + PAGE_SIZE;
-            if (bss_end > bss_start) memset((void*)bss_start, 0, bss_end - bss_start);
+        if (load_segment(segment, buffer, map_start, map_end) != 0) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "ELF: failed to map load segment\n");
+            goto fail;
         }
     }
 
-    // =============================
-    // Step 2: Allocate user stack
-    // =============================
-    uint32_t stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
-    if (paging_map_user_range(stack_bottom, USER_STACK_TOP, 1) != 0) {
-        vga_printf_colour(LIGHT_RED, BLACK, "ELF: failed to allocate user stack\n");
-        kfree(buf);
-        return -1;
+    if (!entry_executable) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "ELF: entry point is outside executable segments\n");
+        goto fail;
     }
 
-    *entry_out = hdr->e_entry;
-    kfree(buf);
+    stack_mapping_attempted = 1;
+    if (paging_map_user_range(USER_ELF_STACK_BOTTOM, USER_STACK_TOP, 1) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "ELF: failed to allocate user stack\n");
+        goto fail;
+    }
+
+    *entry_out = header->e_entry;
+    kfree(buffer);
     return 0;
+
+fail:
+    kfree(buffer);
+    elf_unload();
+    return -1;
 }
