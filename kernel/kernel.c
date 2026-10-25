@@ -34,7 +34,12 @@ void kernel_main(multiboot_info_t *mbi) {
     pit_init(1000);
     rtc_init();
     keyboard_init();
-    pmm_init(mbi);
+    if (pmm_init(mbi) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Kernel startup halted: physical memory setup failed\n");
+        for (;;)
+            __asm__ volatile ("hlt");
+    }
     paging_init();
     tss_set_kernel_stack(kernel_stack_top);
     heap_init();

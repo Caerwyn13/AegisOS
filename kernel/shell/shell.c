@@ -496,24 +496,40 @@ static void cmd_mem() {
 }
 
 static void cmd_memmap() {
-    if (!mbi_ptr) {
+    if (!mbi_ptr ||
+        !(mbi_ptr->flags & MULTIBOOT_INFO_HAS_MMAP) ||
+        !mbi_ptr->mmap_addr || !mbi_ptr->mmap_length ||
+        (uint64_t)mbi_ptr->mmap_addr + mbi_ptr->mmap_length >
+            0x100000000ULL) {
         vga_printf_colour(LIGHT_RED, BLACK, "No memory map available\n");
         return;
     }
 
-    mmap_entry_t *entry = (mmap_entry_t *)mbi_ptr->mmap_addr;
-    mmap_entry_t *end   = (mmap_entry_t *)(mbi_ptr->mmap_addr + mbi_ptr->mmap_length);
-
     vga_printf_colour(YELLOW,    BLACK, "%-16s %-16s %s\n", "Base", "Length", "Type");
     vga_printf_colour(DARK_GREY, BLACK, "%-16s %-16s %s\n", "----", "------", "----");
 
-    while (entry < end) {
+    uint32_t offset = 0;
+    while (offset < mbi_ptr->mmap_length) {
+        uint32_t remaining = mbi_ptr->mmap_length - offset;
+        if (remaining < sizeof(uint32_t)) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "Malformed memory map record\n");
+            return;
+        }
+        mmap_entry_t *entry =
+            (mmap_entry_t *)(mbi_ptr->mmap_addr + offset);
+        if (entry->size < 20 ||
+            entry->size > remaining - sizeof(uint32_t)) {
+            vga_printf_colour(LIGHT_RED, BLACK,
+                              "Malformed memory map record\n");
+            return;
+        }
         vga_printf("0x%x        0x%x        ", entry->base_addr_low, entry->length_low);
         if (entry->type == 1)
             vga_printf_colour(LIGHT_GREEN, BLACK, "Available\n");
         else
             vga_printf_colour(LIGHT_RED,   BLACK, "Reserved\n");
-        entry = (mmap_entry_t *)((uint32_t)entry + entry->size + sizeof(entry->size));
+        offset += sizeof(uint32_t) + entry->size;
     }
 }
 

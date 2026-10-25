@@ -3,6 +3,16 @@
 
 #include "types.h"
 
+#define MULTIBOOT_INFO_HAS_MODULES (1u << 3)
+#define MULTIBOOT_INFO_HAS_MMAP    (1u << 6)
+
+typedef struct {
+    uint32_t mod_start;
+    uint32_t mod_end;
+    uint32_t string;
+    uint32_t reserved;
+} __attribute__((packed)) multiboot_module_t;
+
 typedef struct {
     uint32_t size;
     uint32_t base_addr_low;
