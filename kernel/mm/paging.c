@@ -5,6 +5,8 @@
 #include "memmap.h"
 
 #define EXTRA_PAGE_TABLES 8
+#define PAGE_TABLE_WINDOW_BASE 0xFF800000
+#define PAGE_TABLE_WINDOW_INDEX 1022
 
 
 // ============================================================
@@ -19,6 +21,8 @@ static pde_t page_directory[1024] __attribute__((aligned(4096)));
 static pte_t kernel_page_table[1024] __attribute__((aligned(4096)));
 static pte_t extra_page_tables[EXTRA_PAGE_TABLES][1024] __attribute__((aligned(4096)));
 static int extra_page_table_used[EXTRA_PAGE_TABLES] = {0};
+static uint8_t page_table_in_window[1024];
+static int paging_enabled;
 
 // ============================================================
 // Helpers
@@ -28,14 +32,19 @@ static void flush_tlb(uint32_t virt) {
     __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
 }
 
-static pte_t* alloc_page_table() {
-    for (int i = 0; i < EXTRA_PAGE_TABLES; i++) {
+static pte_t* alloc_page_table(uint32_t pdi, uint32_t *phys_out) {
+    for (int i = 1; i < EXTRA_PAGE_TABLES; i++) {
         if (!extra_page_table_used[i]) {
             extra_page_table_used[i] = 1;
             memset(extra_page_tables[i], 0, PAGE_SIZE);
-            pmm_reserve_range((uint32_t)extra_page_tables[i], PAGE_SIZE);
+            *phys_out = (uint32_t)extra_page_tables[i];
             return extra_page_tables[i];
         }
+    }
+
+    if (!paging_enabled) {
+        vga_printf("Paging: static page-table pool exhausted before paging enabled\n");
+        return 0;
     }
 
     uint32_t phys = (uint32_t)pmm_alloc();
@@ -44,27 +53,35 @@ static pte_t* alloc_page_table() {
         return 0;
     }
 
-    // Temporary kernel mapping for initialization
-    uint32_t temp_virt = 0xF0000000; // safely unused area
-    paging_map(temp_virt, phys, PAGE_PRESENT | PAGE_RW);
-    memset((void*)temp_virt, 0, PAGE_SIZE);
-    return (pte_t*)temp_virt;
+    uint32_t window_virt = PAGE_TABLE_WINDOW_BASE + pdi * PAGE_SIZE;
+    extra_page_tables[0][pdi] = phys | PAGE_PRESENT | PAGE_RW;
+    flush_tlb(window_virt);
+    memset((void *)window_virt, 0, PAGE_SIZE);
+    page_table_in_window[pdi] = 1;
+    *phys_out = phys;
+    return (pte_t *)window_virt;
 }
 
 pte_t* get_page_table(uint32_t virt, int create, int user) {
     uint32_t pdi = virt >> 22;
 
+    if (pdi == PAGE_TABLE_WINDOW_INDEX)
+        return 0;
+
     if (!(page_directory[pdi] & PAGE_PRESENT)) {
         if (!create) return 0;
 
-        pte_t* pt = alloc_page_table();
+        uint32_t phys;
+        pte_t* pt = alloc_page_table(pdi, &phys);
         if (!pt) return 0;
 
-        page_directory[pdi] = ((uint32_t)pt & ~0xFFF) | PAGE_PRESENT | PAGE_RW | (user ? PAGE_USER : 0);
+        page_directory[pdi] = phys | PAGE_PRESENT | PAGE_RW | (user ? PAGE_USER : 0);
     } else if (user) {
         page_directory[pdi] |= PAGE_USER;
     }
 
+    if (page_table_in_window[pdi])
+        return (pte_t *)(PAGE_TABLE_WINDOW_BASE + pdi * PAGE_SIZE);
     return (pte_t*)(page_directory[pdi] & ~0xFFF);
 }
 
@@ -81,6 +98,12 @@ void paging_switch_directory(pde_t* dir) {
 // ============================================================
 
 void paging_map(uint32_t virt, uint32_t phys, uint32_t flags) {
+    if ((virt >> 22) == PAGE_TABLE_WINDOW_INDEX) {
+        vga_printf("Paging: refusing to map reserved page-table window at 0x%x\n",
+                   virt);
+        return;
+    }
+
     int user = (flags & PAGE_USER) != 0;
     pte_t* pt = get_page_table(virt, 1, user);
     if (!pt) {
@@ -174,6 +197,11 @@ void paging_init() {
     // Clear page directory and page tables
     memset(page_directory, 0, sizeof(page_directory));
     memset(kernel_page_table, 0, sizeof(kernel_page_table));
+    memset(extra_page_tables, 0, sizeof(extra_page_tables));
+    memset(page_table_in_window, 0, sizeof(page_table_in_window));
+    extra_page_table_used[0] = 1;
+    page_directory[PAGE_TABLE_WINDOW_INDEX] =
+        (uint32_t)extra_page_tables[0] | PAGE_PRESENT | PAGE_RW;
 
     // ============================================================
     // 1. Identity-map kernel memory (text, data, bss, rodata, strings)
@@ -219,5 +247,6 @@ void paging_init() {
         : "eax"
     );
 
+    paging_enabled = 1;
     vga_printf("Paging enabled\n");
 }
