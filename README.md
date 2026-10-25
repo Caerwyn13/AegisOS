@@ -141,12 +141,18 @@ Userspace programs communicate with the kernel via `int 0x80`. Set `eax` to the 
 | Number | Name | Arguments | Description |
 |---|---|---|---|
 | 0 | `SYS_EXIT` | `ebx` = exit code | Exit the program |
-| 1 | `SYS_PRINT` | `ebx` = string pointer | Print a string |
-| 2 | `SYS_READ` | `ebx` = name, `ecx` = buf, `edx` = size ptr | Read a file |
-| 3 | `SYS_WRITE` | `ebx` = name, `ecx` = buf, `edx` = size | Write a file |
-| 4 | `SYS_OPEN` | `ebx` = name | Open/create a file |
-| 5 | `SYS_CLOSE` | — | Close a file |
-| 6 | `SYS_GETTIME` | `ebx` = rtc_time_t pointer | Get current time |
+| 1 | `SYS_PRINT` | `ebx` = string pointer | Print a NUL-terminated string (up to 4095 characters) |
+| 2 | `SYS_READ` | `ebx` = name, `ecx` = buffer, `edx` = size pointer | Read a file; the buffer must fit the file |
+| 3 | `SYS_WRITE` | `ebx` = name, `ecx` = buffer, `edx` = byte count | Write up to 32 KiB to a file |
+| 4 | `SYS_OPEN` | `ebx` = name | Create a file if it does not exist |
+| 5 | `SYS_CLOSE` | — | No-op; file handles are not implemented |
+| 6 | `SYS_GETTIME` | `ebx` = `rtc_time_t` pointer | Get current time |
+
+Except for `SYS_EXIT`, syscalls return `0` in `eax` on success and `-1` on
+failure. User pointers must refer to mapped user memory with the required
+permissions; invalid pointers are rejected. File names are limited to 31
+characters, and reads and writes are limited to AegisFS's 32 KiB maximum file
+size.
 
 ### Writing Userspace Programs
 

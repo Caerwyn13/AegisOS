@@ -61,6 +61,8 @@ pte_t* get_page_table(uint32_t virt, int create, int user) {
         if (!pt) return 0;
 
         page_directory[pdi] = ((uint32_t)pt & ~0xFFF) | PAGE_PRESENT | PAGE_RW | (user ? PAGE_USER : 0);
+    } else if (user) {
+        page_directory[pdi] |= PAGE_USER;
     }
 
     return (pte_t*)(page_directory[pdi] & ~0xFFF);
@@ -96,7 +98,8 @@ int paging_map_user_range(uint32_t virt_start, uint32_t virt_end, int writable) 
         uint32_t phys = (uint32_t)pmm_alloc();
         if (!phys) return -1;
 
-        uint32_t flags = PAGE_PRESENT | PAGE_USER | PAGE_RW;
+        uint32_t flags = PAGE_PRESENT | PAGE_USER |
+                         (writable ? PAGE_RW : 0);
         paging_map(v, phys, flags);
     }
     return 0;
@@ -132,6 +135,34 @@ uint32_t paging_get_phys(uint32_t virt) {
     if (!pt) return 0;
     uint32_t pti = (virt >> 12) & 0x3FF;
     return pt[pti] & ~0xFFF;
+}
+
+int paging_user_range_accessible(uint32_t address, uint32_t size, int writable) {
+    if (!size)
+        return 1;
+    if (!address || size - 1 > 0xFFFFFFFFu - address)
+        return 0;
+
+    uint32_t last_address = address + size - 1;
+    uint32_t page = address & ~(PAGE_SIZE - 1);
+    uint32_t last_page = last_address & ~(PAGE_SIZE - 1);
+    for (;;) {
+        uint32_t pdi = page >> 22;
+        uint32_t pde = page_directory[pdi];
+        if (!(pde & PAGE_PRESENT) || !(pde & PAGE_USER) ||
+            (writable && !(pde & PAGE_RW)))
+            return 0;
+
+        pte_t *page_table = (pte_t *)(pde & ~(PAGE_SIZE - 1));
+        uint32_t pte = page_table[(page >> 12) & 0x3FF];
+        if (!(pte & PAGE_PRESENT) || !(pte & PAGE_USER) ||
+            (writable && !(pte & PAGE_RW)))
+            return 0;
+
+        if (page == last_page)
+            return 1;
+        page += PAGE_SIZE;
+    }
 }
 
 void paging_init() {

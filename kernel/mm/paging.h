@@ -20,5 +20,6 @@ void paging_unmap(uint32_t virt);
 void paging_unmap_range(uint32_t virt_start, uint32_t virt_end);
 int paging_map_user_range(uint32_t virt_start, uint32_t virt_end, int writable);
 uint32_t paging_get_phys(uint32_t virt);
+int paging_user_range_accessible(uint32_t address, uint32_t size, int writable);
 
 #endif // PAGING_H

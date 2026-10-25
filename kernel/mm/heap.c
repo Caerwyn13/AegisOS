@@ -26,7 +26,7 @@ static int expand(uint32_t size) {
             vga_printf("Heap: PMM out of memory during expand!\n");
             return -1;
         }
-        paging_map(heap_end, phys, PAGE_PRESENT | PAGE_RW | PAGE_USER);
+        paging_map(heap_end, phys, PAGE_PRESENT | PAGE_RW);
         heap_end += PAGE_SIZE;
     }
 

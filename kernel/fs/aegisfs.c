@@ -185,20 +185,27 @@ int fs_write(const char *name, const uint8_t *data, uint32_t size) {
 }
 
 int fs_read(const char *name, uint8_t *buf, uint32_t *size) {
-    if (!fs_ready) return -1;
+    if (!fs_ready || !name || !buf || !size) return -1;
 
     int idx = find_inode(name);
     if (idx < 0) return -1;
 
     fs_inode_t inode;
     inode_read(idx, &inode);
+    if (inode.size > FS_MAX_SIZE) {
+        vga_printf("AegisFS: file size is invalid\n");
+        return -1;
+    }
 
     uint32_t sectors = (inode.size + FS_BLOCK_SIZE - 1) / FS_BLOCK_SIZE;
     uint32_t i;
     for (i = 0; i < sectors; i++) {
         uint8_t sector[FS_BLOCK_SIZE];
         ata_read(inode.start_lba + i, 1, sector);
-        memcpy(buf + (i * FS_BLOCK_SIZE), sector, FS_BLOCK_SIZE);
+        uint32_t offset = i * FS_BLOCK_SIZE;
+        uint32_t chunk = (inode.size - offset) < FS_BLOCK_SIZE
+            ? (inode.size - offset) : FS_BLOCK_SIZE;
+        memcpy(buf + offset, sector, chunk);
     }
 
     *size = inode.size;

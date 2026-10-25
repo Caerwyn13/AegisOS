@@ -59,7 +59,6 @@ static const char *help_lines[] = {
     "  clear -c <colour>      - clear with background colour",
     "  echo <text>            - print text",
     "  rps <choice>           - play rock-paper-scissors",
-    "  taskdemo               - demonstrate multitasking",
     "  net                    - show network interface status",
     "  ping <IPv4|hostname>   - ping an IPv4 address or hostname",
     "  tcp <IPv4|hostname> <port> - test and close a TCP connection",
