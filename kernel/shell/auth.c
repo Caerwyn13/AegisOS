@@ -257,7 +257,7 @@ int auth_load(void) {
     if (!buffer)
         return -1;
     uint32_t size = 0;
-    int status = fs_read(AUTH_DB_NAME, buffer, &size);
+    int status = fs_read_system(AUTH_DB_NAME, buffer, &size);
     if (status == 0 && size == sizeof(auth_database_t)) {
         memcpy(&auth_database, buffer, sizeof(auth_database));
         if (auth_database.magic == AUTH_DB_MAGIC &&
@@ -294,8 +294,8 @@ int auth_create_accounts(const char *root_password,
                          auth_database.root_hash);
     derive_password_hash(user_password, auth_database.user_salt,
                          auth_database.user_hash);
-    if (fs_write(AUTH_DB_NAME, (const uint8_t *)&auth_database,
-                 sizeof(auth_database)) != 0) {
+    if (fs_write_system(AUTH_DB_NAME, (const uint8_t *)&auth_database,
+                        sizeof(auth_database)) != 0) {
         memset(&auth_database, 0, sizeof(auth_database));
         return -1;
     }

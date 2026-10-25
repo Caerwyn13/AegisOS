@@ -55,6 +55,7 @@ A simple x86 operating system written in C and NASM assembly.
 | `cat <file>` | Read a file |
 | `write <file> <content>` | Write to a file |
 | `edit <file>` | Create or edit a text file |
+| `chmod <mode> <file>` | Change file permissions using an octal mode |
 | `run <file>` | Run an Aegis language script |
 | `touch <file>` | Create an empty file |
 | `rm <file>` | Delete a file |
@@ -72,13 +73,25 @@ typed. The account database is stored on AegisFS; AegisOS stores salted,
 iterated password hashes rather than the passwords themselves. Keep a copy of
 your disk image: account recovery and password changes are not implemented yet.
 
-The `user` account has a separate shell prompt and cannot run administrative
-commands or use userspace file-creation/write syscalls. Use `logout` to return
-to the login prompt. Root and user share the same filesystem; per-file
-ownership, home directories, `su`, and process-level privilege separation are
-not implemented. This early-stage login is useful for the OS's interactive
-shell, but should not be treated as a security boundary against malicious
-kernel or userspace code. Use it only in an isolated emulator.
+New files belong to the account that creates them and start with mode `0644`.
+By default, the owner can read and modify their files, while other accounts
+can read but not modify them. Root can read, modify, delete, and change
+permissions on every file. The `user` account cannot modify or delete
+root-owned files. `ls` displays file owners and modes. `chmod` accepts octal
+modes such as `chmod 755 hello.elf`; only root or the file's owner can change
+its mode. Execute permission is required for `run` and `exec`. Existing files
+from older AegisFS disks are migrated as root-owned `0644` files; root can make
+an existing program executable with `chmod 755 <file>`.
+
+Both accounts can use `reboot` and `shutdown`. Diagnostic and hardware-test
+commands such as `memmap`, `heap`, `hexdump`, `atatest`, `inodetest`, and
+`syscalltest` remain root-only. Use `logout` to return to the login prompt.
+Root and user share one filesystem; home directories and `su` are not
+implemented. Filesystem permissions are enforced by the kernel, including for
+userspace file syscalls, but AegisOS does not yet isolate processes from the
+kernel. Since regular users can run ELF programs, this early-stage login is
+not a security boundary against malicious userspace or kernel code. Use it
+only in an isolated emulator.
 
 Available colours for `clear -c`: `black`, `blue`, `green`, `cyan`, `red`, `magenta`, `brown`, `grey`, `darkgrey`, `lightblue`, `lightgreen`, `lightcyan`, `lightred`, `lightmagenta`, `yellow`, `white`
 
@@ -160,9 +173,9 @@ Userspace programs communicate with the kernel via `int 0x80`. Set `eax` to the 
 |---|---|---|---|
 | 0 | `SYS_EXIT` | `ebx` = exit code | Exit the program |
 | 1 | `SYS_PRINT` | `ebx` = string pointer | Print a NUL-terminated string (up to 4095 characters) |
-| 2 | `SYS_READ` | `ebx` = name, `ecx` = buffer, `edx` = size pointer | Read a file; the buffer must fit the file |
-| 3 | `SYS_WRITE` | `ebx` = name, `ecx` = buffer, `edx` = byte count | Write up to 32 KiB to a file |
-| 4 | `SYS_OPEN` | `ebx` = name | Create a file if it does not exist |
+| 2 | `SYS_READ` | `ebx` = name, `ecx` = buffer, `edx` = size pointer | Read a file allowed by its permissions; the buffer must fit the file |
+| 3 | `SYS_WRITE` | `ebx` = name, `ecx` = buffer, `edx` = byte count | Write up to 32 KiB if permitted; creates new files owned by the current account |
+| 4 | `SYS_OPEN` | `ebx` = name | Create a file owned by the current account, or check write access to an existing file |
 | 5 | `SYS_CLOSE` | — | No-op; file handles are not implemented |
 | 6 | `SYS_GETTIME` | `ebx` = `rtc_time_t` pointer | Get current time |
 

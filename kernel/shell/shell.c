@@ -83,6 +83,7 @@ static const char *help_lines[] = {
     "  cat <file>             - read a file",
     "  write <file> <content> - write to a file",
     "  edit <file>            - edit a text file",
+    "  chmod <mode> <file>    - change file permissions (for example, 755)",
     "  run <file>             - run an Aegis script",
     "  exec <file>            - execute an ELF binary",
     "  rm <file>              - delete a file",
@@ -265,6 +266,22 @@ static uint32_t parse_int(const char *str) {
     return val;
 }
 
+static int parse_file_mode(const char *text, uint16_t *mode) {
+    uint32_t length = strlen(text);
+    if ((length != 3 && length != 4) || !mode ||
+        (length == 4 && text[0] != '0'))
+        return -1;
+
+    uint16_t value = 0;
+    for (uint32_t i = length == 4 ? 1 : 0; i < length; i++) {
+        if (text[i] < '0' || text[i] > '7')
+            return -1;
+        value = (uint16_t)(value * 8 + (text[i] - '0'));
+    }
+    *mode = value;
+    return 0;
+}
+
 void shell_after_exec() {
     vga_printf("Process exited\n");
     print_prompt();
@@ -347,6 +364,11 @@ static void cmd_cat() {
         vga_printf_colour(LIGHT_RED, BLACK, "cat: access denied\n");
         return;
     }
+    if (fs_exists(args[1]) && !fs_can_read(args[1])) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "cat: permission denied: %s\n", args[1]);
+        return;
+    }
     uint8_t *buf = (uint8_t *)kmalloc(FS_MAX_SIZE);
     if (!buf) {
         vga_printf_colour(LIGHT_RED, BLACK, "cat: out of memory\n");
@@ -366,6 +388,11 @@ static void cmd_cat() {
 static void cmd_write() {
     if (argc < 3) {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: write <file> <content>\n");
+        return;
+    }
+    if (fs_exists(args[1]) && !fs_can_write(args[1])) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "write: permission denied: %s\n", args[1]);
         return;
     }
     // join all args after filename into one string
@@ -389,6 +416,11 @@ static void cmd_edit() {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: edit <file>\n");
         return;
     }
+    if (fs_exists(args[1]) && !fs_can_write(args[1])) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "edit: permission denied: %s\n", args[1]);
+        return;
+    }
 
     int status = editor_start(args[1]);
     if (status == -1)
@@ -409,12 +441,24 @@ static void cmd_run() {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: run <file>\n");
         return;
     }
+    if (!fs_can_execute(args[1])) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "run: permission denied or file not found: %s\n",
+                          args[1]);
+        return;
+    }
     script_run_file(args[1]);
 }
 
 static void cmd_exec() {
     if (argc < 2) {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: exec <file>\n");
+        return;
+    }
+    if (!fs_can_execute(args[1])) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "exec: permission denied or file not found: %s\n",
+                          args[1]);
         return;
     }
 
@@ -431,6 +475,11 @@ static void cmd_exec() {
 static void cmd_rm() {
     if (argc < 2) {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: rm <file>\n");
+        return;
+    }
+    if (fs_exists(args[1]) && !fs_can_write(args[1])) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "rm: permission denied: %s\n", args[1]);
         return;
     }
     if (fs_delete(args[1]) < 0) {
@@ -452,6 +501,23 @@ static void cmd_touch() {
         vga_printf_colour(LIGHT_GREEN, BLACK, "[OK] ");
         vga_printf("Created %s\n", args[1]);
     }
+}
+
+static void cmd_chmod() {
+    uint16_t mode;
+    if (argc != 3 || parse_file_mode(args[1], &mode) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Usage: chmod <octal-mode> <file> (for example, 755)\n");
+        return;
+    }
+    if (fs_chmod(args[2], mode) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "chmod: permission denied or file not found: %s\n",
+                          args[2]);
+        return;
+    }
+    vga_printf_colour(LIGHT_GREEN, BLACK, "[OK] ");
+    vga_printf("Changed permissions on %s to %s\n", args[2], args[1]);
 }
 
 static void cmd_help() {
@@ -1321,25 +1387,19 @@ static void execute(char *cmd) {
     if (argc == 0) return;
 
     int root_only =
-        strcmp(args[0], "write") == 0 ||
-        strcmp(args[0], "edit") == 0 ||
-        strcmp(args[0], "rm") == 0 ||
-        strcmp(args[0], "touch") == 0 ||
-        strcmp(args[0], "reboot") == 0 ||
-        strcmp(args[0], "shutdown") == 0 ||
         strcmp(args[0], "memmap") == 0 ||
         strcmp(args[0], "heap") == 0 ||
         strcmp(args[0], "hexdump") == 0 ||
         strcmp(args[0], "atatest") == 0 ||
         strcmp(args[0], "inodetest") == 0 ||
-        strcmp(args[0], "syscalltest") == 0 ||
-        (strcmp(args[0], "http") == 0 && argc == 4);
+        strcmp(args[0], "syscalltest") == 0;
     int account_file_access =
         ((strcmp(args[0], "cat") == 0 ||
           strcmp(args[0], "write") == 0 ||
           strcmp(args[0], "edit") == 0 ||
           strcmp(args[0], "rm") == 0 ||
           strcmp(args[0], "touch") == 0 ||
+          strcmp(args[0], "chmod") == 0 ||
           strcmp(args[0], "run") == 0 ||
           strcmp(args[0], "exec") == 0) &&
          argc >= 2 && auth_is_sensitive_file(args[1])) ||
@@ -1379,6 +1439,7 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "run")      == 0) cmd_run();
     else if (strcmp(args[0], "rm")       == 0) cmd_rm();
     else if (strcmp(args[0], "touch")    == 0) cmd_touch();
+    else if (strcmp(args[0], "chmod")    == 0) cmd_chmod();
     else if (strcmp(args[0], "exec")     == 0) cmd_exec();
     else if (strcmp(args[0], "rps")      == 0) cmd_rps();
     else if (strcmp(args[0], "taskdemo") == 0) cmd_taskdemo();

@@ -27,6 +27,7 @@ print version
 Run it:
 
 ```text
+chmod 755 hello.aeg
 run hello.aeg
 ```
 
