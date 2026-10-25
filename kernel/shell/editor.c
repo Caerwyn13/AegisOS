@@ -261,7 +261,7 @@ void editor_handle_key(uint16_t key) {
         }
         editor_quit_pending = 1;
         strcpy(editor_message,
-               "Unsaved changes: press Ctrl+Q again to discard, or Ctrl+S to save.");
+               "Unsaved changes: Ctrl+Q again to discard, Ctrl+S to save.");
     } else if (key == '\n') {
         editor_insert('\n');
     } else if (key == '\b') {
