@@ -104,7 +104,10 @@ static int sys_open(uint32_t name_address) {
 static int sys_gettime(uint32_t address) {
     if (!paging_user_range_accessible(address, sizeof(rtc_time_t), 1))
         return -1;
-    *(rtc_time_t *)address = rtc_get_time();
+    rtc_time_t time;
+    if (rtc_get_time(&time) != 0)
+        return -1;
+    *(rtc_time_t *)address = time;
     return 0;
 }
 

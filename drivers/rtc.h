@@ -13,6 +13,6 @@ typedef struct {
 } rtc_time_t;
 
 void     rtc_init();
-rtc_time_t rtc_get_time();
+int      rtc_get_time(rtc_time_t *time);
 
 #endif // RTC_H

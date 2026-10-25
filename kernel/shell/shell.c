@@ -548,7 +548,12 @@ static void cmd_uptime() {
 }
 
 static void cmd_date() {
-    rtc_time_t t = rtc_get_time();
+    rtc_time_t t;
+    if (rtc_get_time(&t) != 0) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "date: RTC did not provide a stable valid time\n");
+        return;
+    }
     print_section("DATE / TIME");
     vga_printf_colour(LIGHT_CYAN, BLACK, "%02u/%02u/%u ",
         t.day, t.month, t.year);
