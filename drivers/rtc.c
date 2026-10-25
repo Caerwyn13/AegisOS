@@ -131,7 +131,7 @@ int rtc_get_time(rtc_time_t *time) {
                              first_status, second_status))
             continue;
         if (decode_snapshot(&second, second_status) != 0)
-            return -1;
+            continue;
         *time = second;
         return 0;
     }

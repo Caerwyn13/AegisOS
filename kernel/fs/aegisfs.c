@@ -27,7 +27,6 @@ static int fs_ready = 0;
 static void sb_read() {
     uint8_t buf[FS_BLOCK_SIZE];
     ata_read(SUPERBLOCK_LBA, 1, buf);
-    vga_printf("sb bytes: %x %x %x %x\n", buf[0], buf[1], buf[2], buf[3]);
     memcpy(&sb, buf, sizeof(fs_superblock_t));
 }
 
@@ -98,10 +97,10 @@ static uint32_t alloc_data_lba(uint32_t sectors_needed) {
 
 void fs_init() {
     sb_read();
-    vga_printf("magic: 0x%x expected: 0x%x\n", sb.magic, FS_MAGIC);
 
     if (sb.magic != FS_MAGIC) {
-        vga_printf("formatting...\n");
+        vga_printf_colour(YELLOW, BLACK,
+                          "[  INFO ] Formatting AegisFS filesystem\n");
         memset(&sb, 0, sizeof(sb));
         sb.magic      = FS_MAGIC;
         sb.version    = 1;
@@ -110,7 +109,6 @@ void fs_init() {
 
         // read it back immediately to verify
         sb_read();
-        vga_printf("magic after format: 0x%x\n", sb.magic);
 
         // zero out inode area
         uint8_t zeroes[FS_BLOCK_SIZE];
@@ -119,9 +117,12 @@ void fs_init() {
         for (i = INODE_START_LBA; i < DATA_START_LBA; i++)
             ata_write(i, 1, zeroes);
 
-        vga_printf("AegisFS: formatted successfully\n");
+        vga_printf_colour(LIGHT_GREEN, BLACK,
+                          "[  OK  ] AegisFS formatted successfully\n");
     } else {
-        vga_printf("AegisFS: mounted, %u files\n", sb.file_count);
+        vga_printf_colour(LIGHT_GREEN, BLACK,
+                          "[  OK  ] AegisFS mounted (%u files)\n",
+                          sb.file_count);
     }
 
     fs_ready = 1;
@@ -244,7 +245,7 @@ void fs_list() {
     for (i = 0; i < FS_MAX_FILES && found < (int)sb.file_count; i++) {
         fs_inode_t inode;
         inode_read(i, &inode);
-        if (inode.used) {
+        if (inode.used && inode.name[0] != '.') {
             vga_printf("%-32s %u bytes\n", inode.name, inode.size);
             found++;
         }

@@ -18,6 +18,7 @@
 #include "../net/net.h"
 #include "editor.h"
 #include "script.h"
+#include "auth.h"
 
 #define BUFFER_SIZE     256
 #define HISTORY_SIZE    10
@@ -38,6 +39,12 @@ static uint32_t          buf_cursor;
 static uint32_t          rendered_length;
 static int               input_origin_row;
 static int               input_origin_column;
+static uint32_t          login_input_length;
+static char              login_input[AUTH_PASSWORD_MAX];
+static char              login_username[AUTH_USERNAME_MAX];
+static char              setup_root_password[AUTH_PASSWORD_MAX];
+static char              setup_user_password[AUTH_PASSWORD_MAX];
+static uint8_t           login_state;
 static volatile uint32_t key_read_index;
 static volatile uint32_t key_write_index;
 static uint16_t key_queue[KEY_QUEUE_SIZE];
@@ -58,6 +65,7 @@ static const char *help_lines[] = {
     "  clear                  - clear the screen",
     "  clear -c <colour>      - clear with background colour",
     "  echo <text>            - print text",
+    "  fetch                  - show the AegisOS system dashboard",
     "  rps <choice>           - play rock-paper-scissors",
     "  net                    - show network interface status",
     "  ping <IPv4|hostname>   - ping an IPv4 address or hostname",
@@ -82,6 +90,7 @@ static const char *help_lines[] = {
     "  about                  - about AegisOS",
     "  reboot                 - reboot the system",
     "  shutdown               - shutdown the system",
+    "  logout                 - end the current session",
     0  // null terminator
 };
 
@@ -90,12 +99,14 @@ static const char *help_lines[] = {
 // ============================================================
 
 static void print_prompt() {
-    vga_printf_colour(LIGHT_GREEN, BLACK, "root");
+    vga_colour_t username_colour = auth_is_root() ? LIGHT_RED : LIGHT_GREEN;
+    vga_printf_colour(username_colour, BLACK, "%s", auth_username());
     vga_printf_colour(DARK_GREY, BLACK, "@");
     vga_printf_colour(LIGHT_CYAN, BLACK, "AegisOS");
     vga_printf_colour(DARK_GREY, BLACK, ":");
     vga_printf_colour(LIGHT_BLUE, BLACK, "~");
-    vga_printf_colour(WHITE, BLACK, "$ ");
+    vga_printf_colour(auth_is_root() ? LIGHT_RED : WHITE, BLACK,
+                      auth_is_root() ? "# " : "$ ");
     vga_set_colour(WHITE, BLACK);
     input_origin_row = vga_get_row();
     input_origin_column = vga_get_column();
@@ -332,6 +343,10 @@ static void cmd_cat() {
         vga_printf_colour(LIGHT_RED, BLACK, "Usage: cat <file>\n");
         return;
     }
+    if (auth_is_sensitive_file(args[1])) {
+        vga_printf_colour(LIGHT_RED, BLACK, "cat: access denied\n");
+        return;
+    }
     uint8_t *buf = (uint8_t *)kmalloc(FS_MAX_SIZE);
     if (!buf) {
         vga_printf_colour(LIGHT_RED, BLACK, "cat: out of memory\n");
@@ -493,6 +508,45 @@ static void cmd_mem() {
     print_section("MEMORY");
     vga_printf_colour(LIGHT_CYAN, BLACK, "Free: ");
     vga_printf_colour(LIGHT_GREEN, BLACK, "%u KB\n", pmm_free_pages() * 4);
+}
+
+static void begin_login(void);
+
+static void cmd_logout() {
+    auth_session_logout();
+    vga_printf_colour(LIGHT_GREY, BLACK, "Session ended.\n");
+    begin_login();
+}
+
+static void cmd_fetch() {
+    uint32_t seconds = pit_ticks() / 1000;
+    uint32_t days = seconds / 86400;
+    uint32_t hours = (seconds / 3600) % 24;
+    uint32_t minutes = (seconds / 60) % 60;
+    seconds %= 60;
+    rtc_time_t time;
+
+    vga_printf_colour(LIGHT_CYAN, BLACK, "   _            _     ___  ___  \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "  /_\\  ___ __ _(_)___/ _ \\/ __| \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, " / _ \\/ -_) _` | (_-< (_) \\__ \\ \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "/_/ \\_\\___\\__, |_/__/\\___/|___/ \n");
+    vga_printf_colour(LIGHT_CYAN, BLACK, "          |___/                 \n");
+    vga_printf_colour(YELLOW, BLACK, "  AegisOS system dashboard\n\n");
+
+    vga_printf_colour(LIGHT_CYAN, BLACK, "  Uptime  ");
+    vga_printf_colour(WHITE, BLACK, "%u day(s), %02u:%02u:%02u\n",
+                      days, hours, minutes, seconds);
+    vga_printf_colour(LIGHT_CYAN, BLACK, "  Memory  ");
+    vga_printf_colour(LIGHT_GREEN, BLACK, "%u KB free\n",
+                      pmm_free_pages() * 4);
+    vga_printf_colour(LIGHT_CYAN, BLACK, "  Clock   ");
+    if (rtc_get_time(&time) == 0) {
+        vga_printf_colour(WHITE, BLACK, "%02u/%02u/%u %02u:%02u:%02u\n",
+                          time.day, time.month, time.year,
+                          time.hour, time.minute, time.second);
+    } else {
+        vga_printf_colour(LIGHT_RED, BLACK, "unavailable\n");
+    }
 }
 
 static void cmd_memmap() {
@@ -1266,10 +1320,48 @@ static void execute(char *cmd) {
     parse_args(cmd);
     if (argc == 0) return;
 
+    int root_only =
+        strcmp(args[0], "write") == 0 ||
+        strcmp(args[0], "edit") == 0 ||
+        strcmp(args[0], "rm") == 0 ||
+        strcmp(args[0], "touch") == 0 ||
+        strcmp(args[0], "reboot") == 0 ||
+        strcmp(args[0], "shutdown") == 0 ||
+        strcmp(args[0], "memmap") == 0 ||
+        strcmp(args[0], "heap") == 0 ||
+        strcmp(args[0], "hexdump") == 0 ||
+        strcmp(args[0], "atatest") == 0 ||
+        strcmp(args[0], "inodetest") == 0 ||
+        strcmp(args[0], "syscalltest") == 0 ||
+        (strcmp(args[0], "http") == 0 && argc == 4);
+    int account_file_access =
+        ((strcmp(args[0], "cat") == 0 ||
+          strcmp(args[0], "write") == 0 ||
+          strcmp(args[0], "edit") == 0 ||
+          strcmp(args[0], "rm") == 0 ||
+          strcmp(args[0], "touch") == 0 ||
+          strcmp(args[0], "run") == 0 ||
+          strcmp(args[0], "exec") == 0) &&
+         argc >= 2 && auth_is_sensitive_file(args[1])) ||
+        (strcmp(args[0], "http") == 0 && argc == 4 &&
+         auth_is_sensitive_file(args[3]));
+    if (account_file_access) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "%s: access to the account database is denied\n",
+                          args[0]);
+        return;
+    }
+    if (root_only && !auth_is_root()) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "%s: permission denied (root required)\n", args[0]);
+        return;
+    }
+
     if      (strcmp(args[0], "help")     == 0) cmd_help();
     else if (strcmp(args[0], "clear")    == 0) cmd_clear();
     else if (strcmp(args[0], "echo")     == 0) cmd_echo();
     else if (strcmp(args[0], "mem")      == 0) cmd_mem();
+    else if (strcmp(args[0], "fetch")    == 0) cmd_fetch();
     else if (strcmp(args[0], "memmap")   == 0) cmd_memmap();
     else if (strcmp(args[0], "heap")     == 0) cmd_heap();
     else if (strcmp(args[0], "uptime")   == 0) cmd_uptime();
@@ -1277,6 +1369,7 @@ static void execute(char *cmd) {
     else if (strcmp(args[0], "hexdump")  == 0) cmd_hexdump();
     else if (strcmp(args[0], "history")  == 0) cmd_history();
     else if (strcmp(args[0], "about")    == 0) cmd_about();
+    else if (strcmp(args[0], "logout")   == 0) cmd_logout();
     else if (strcmp(args[0], "reboot")   == 0) cmd_reboot();
     else if (strcmp(args[0], "shutdown") == 0) cmd_shutdown();
     else if (strcmp(args[0], "ls")       == 0) cmd_ls();
@@ -1306,6 +1399,205 @@ static void execute(char *cmd) {
 // Public API
 // ============================================================
 
+typedef enum {
+    LOGIN_LOCKED,
+    LOGIN_USERNAME,
+    LOGIN_PASSWORD,
+    SET_ROOT_PASSWORD,
+    CONFIRM_ROOT_PASSWORD,
+    SET_USER_PASSWORD,
+    CONFIRM_USER_PASSWORD
+} login_state_t;
+
+static void clear_login_input(void) {
+    memset(login_input, 0, sizeof(login_input));
+    login_input_length = 0;
+}
+
+static void login_prompt(void) {
+    switch ((login_state_t)login_state) {
+        case LOGIN_USERNAME:
+            vga_printf_colour(LIGHT_CYAN, BLACK, "AegisOS login: ");
+            break;
+        case LOGIN_PASSWORD:
+            vga_printf_colour(LIGHT_CYAN, BLACK, "Password: ");
+            break;
+        case SET_ROOT_PASSWORD:
+            vga_printf_colour(LIGHT_CYAN, BLACK, "New root password: ");
+            break;
+        case CONFIRM_ROOT_PASSWORD:
+            vga_printf_colour(LIGHT_CYAN, BLACK, "Confirm root password: ");
+            break;
+        case SET_USER_PASSWORD:
+            vga_printf_colour(LIGHT_CYAN, BLACK, "New user password: ");
+            break;
+        case CONFIRM_USER_PASSWORD:
+            vga_printf_colour(LIGHT_CYAN, BLACK, "Confirm user password: ");
+            break;
+        case LOGIN_LOCKED:
+            return;
+    }
+}
+
+static void begin_login(void) {
+    auth_session_logout();
+    memset(login_username, 0, sizeof(login_username));
+    memset(setup_root_password, 0, sizeof(setup_root_password));
+    memset(setup_user_password, 0, sizeof(setup_user_password));
+    memset(history, 0, sizeof(history));
+    memset(history_draft, 0, sizeof(history_draft));
+    history_count = 0;
+    history_index = -1;
+    history_draft_length = 0;
+    history_browsing = 0;
+    clear_login_input();
+    login_state = LOGIN_USERNAME;
+    login_prompt();
+}
+
+static void start_account_setup(void) {
+    vga_printf_colour(YELLOW, BLACK,
+                      "First boot: create passwords for root and user.\n");
+    vga_printf_colour(LIGHT_GREY, BLACK,
+                      "Use at least %u characters; password input is hidden.\n",
+                      AUTH_PASSWORD_MIN);
+    clear_login_input();
+    login_state = SET_ROOT_PASSWORD;
+    login_prompt();
+}
+
+static void finish_account_setup(void) {
+    if (auth_create_accounts(setup_root_password, setup_user_password) != 0) {
+        memset(setup_root_password, 0, sizeof(setup_root_password));
+        memset(setup_user_password, 0, sizeof(setup_user_password));
+        clear_login_input();
+        login_state = LOGIN_LOCKED;
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Account setup could not be saved; login is locked.\n");
+        return;
+    }
+
+    memset(setup_root_password, 0, sizeof(setup_root_password));
+    memset(setup_user_password, 0, sizeof(setup_user_password));
+    vga_printf_colour(LIGHT_GREEN, BLACK,
+                      "Account passwords saved. Please log in.\n");
+    begin_login();
+}
+
+static void submit_login_input(void) {
+    switch ((login_state_t)login_state) {
+        case LOGIN_USERNAME:
+            if (!login_input_length) {
+                vga_printf_colour(LIGHT_RED, BLACK, "Enter a username.\n");
+                clear_login_input();
+                login_prompt();
+                return;
+            }
+            if (login_input_length >= sizeof(login_username)) {
+                vga_printf_colour(LIGHT_RED, BLACK, "Username is too long.\n");
+                clear_login_input();
+                login_prompt();
+                return;
+            }
+            memcpy(login_username, login_input, login_input_length + 1);
+            clear_login_input();
+            login_state = LOGIN_PASSWORD;
+            login_prompt();
+            return;
+        case LOGIN_PASSWORD: {
+            int result = auth_verify(login_username, login_input);
+            memset(login_input, 0, sizeof(login_input));
+            clear_login_input();
+            memset(login_username, 0, sizeof(login_username));
+            if (result < 0) {
+                vga_printf_colour(LIGHT_RED, BLACK, "Login incorrect.\n");
+                login_state = LOGIN_USERNAME;
+                login_prompt();
+                return;
+            }
+            vga_printf_colour(LIGHT_GREEN, BLACK, "Welcome, %s.\n",
+                              auth_username());
+            print_prompt();
+            return;
+        }
+        case SET_ROOT_PASSWORD:
+        case SET_USER_PASSWORD:
+            if (login_input_length < AUTH_PASSWORD_MIN) {
+                vga_printf_colour(LIGHT_RED, BLACK,
+                                  "Password must contain at least %u characters.\n",
+                                  AUTH_PASSWORD_MIN);
+                clear_login_input();
+                login_prompt();
+                return;
+            }
+            if (login_state == SET_ROOT_PASSWORD) {
+                memcpy(setup_root_password, login_input,
+                       login_input_length + 1);
+                login_state = CONFIRM_ROOT_PASSWORD;
+            } else {
+                memcpy(setup_user_password, login_input,
+                       login_input_length + 1);
+                login_state = CONFIRM_USER_PASSWORD;
+            }
+            memset(login_input, 0, sizeof(login_input));
+            clear_login_input();
+            login_prompt();
+            return;
+        case CONFIRM_ROOT_PASSWORD:
+            if (strcmp(login_input, setup_root_password) != 0) {
+                memset(setup_root_password, 0, sizeof(setup_root_password));
+                vga_printf_colour(LIGHT_RED, BLACK,
+                                  "Passwords did not match; try again.\n");
+                login_state = SET_ROOT_PASSWORD;
+            } else {
+                vga_printf_colour(LIGHT_GREEN, BLACK,
+                                  "Root password confirmed.\n");
+                login_state = SET_USER_PASSWORD;
+            }
+            memset(login_input, 0, sizeof(login_input));
+            clear_login_input();
+            login_prompt();
+            return;
+        case CONFIRM_USER_PASSWORD:
+            if (strcmp(login_input, setup_user_password) != 0) {
+                memset(setup_user_password, 0, sizeof(setup_user_password));
+                vga_printf_colour(LIGHT_RED, BLACK,
+                                  "Passwords did not match; try again.\n");
+                login_state = SET_USER_PASSWORD;
+                memset(login_input, 0, sizeof(login_input));
+                clear_login_input();
+                login_prompt();
+                return;
+            }
+            memset(login_input, 0, sizeof(login_input));
+            clear_login_input();
+            finish_account_setup();
+            return;
+        case LOGIN_LOCKED:
+            return;
+    }
+}
+
+static void process_login_key(uint16_t key) {
+    if (key == '\n') {
+        vga_putchar('\n');
+        submit_login_input();
+    } else if (key == '\b') {
+        if (login_input_length) {
+            login_input[--login_input_length] = '\0';
+            vga_printf("\b \b");
+        }
+    } else if (key >= 32 && key <= 126 &&
+               login_input_length < sizeof(login_input) - 1) {
+        login_input[login_input_length++] = (char)key;
+        login_input[login_input_length] = '\0';
+        if (login_state == LOGIN_USERNAME)
+            vga_putchar((char)key);
+        else
+            vga_putchar('*');
+    }
+}
+
 void shell_init(multiboot_info_t *mbi) {
     mbi_ptr = mbi;
     vga_printf_colour(LIGHT_CYAN, BLACK, "   _            _     ___  ___  \n");
@@ -1314,9 +1606,28 @@ void shell_init(multiboot_info_t *mbi) {
     vga_printf_colour(LIGHT_CYAN, BLACK, "/_/ \\_\\___\\__, |_/__/\\___/|___/ \n");
     vga_printf_colour(LIGHT_CYAN, BLACK, "          |___/                 \n");      
     vga_printf("\n");
-    vga_printf_colour(YELLOW,     BLACK, "  Welcome to AegisOS!\n");
-    vga_printf_colour(LIGHT_GREY, BLACK, "  Type 'help' for a list of commands.\n\n");
+    vga_printf_colour(YELLOW, BLACK, "  Welcome to AegisOS!\n");
+    vga_printf_colour(LIGHT_GREY, BLACK,
+                      "  Type 'help' to explore commands, or 'fetch' for system status.\n");
+#ifdef ACPI_TEST_NO_STORAGE
+    auth_session_start("root", 1);
+    vga_printf_colour(YELLOW, BLACK,
+                      "[  WARN ] Authentication disabled in ACPI test build.\n");
     print_prompt();
+#else
+    int auth_status = auth_load();
+    if (auth_status == 0) {
+        vga_printf("\n");
+        begin_login();
+    } else if (auth_status == 1) {
+        vga_printf("\n");
+        start_account_setup();
+    } else {
+        login_state = LOGIN_LOCKED;
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "Account database is invalid or unavailable; login is locked.\n");
+    }
+#endif
 }
 
 static void process_key(uint16_t key) {
@@ -1335,7 +1646,7 @@ static void process_key(uint16_t key) {
         buf[0] = '\0';
         history_index = history_count;
         history_browsing = 0;
-        if (!editor_is_active())
+        if (!editor_is_active() && auth_is_logged_in())
             print_prompt();
     } else if (key == '\b') {
         if (buf_cursor > 0) {
@@ -1397,7 +1708,9 @@ void shell_process_input(void) {
     while (key_read_index != key_write_index) {
         uint16_t key = key_queue[key_read_index];
         key_read_index = (key_read_index + 1) % KEY_QUEUE_SIZE;
-        if (editor_is_active()) {
+        if (!auth_is_logged_in()) {
+            process_login_key(key);
+        } else if (editor_is_active()) {
             editor_handle_key(key);
             if (!editor_is_active())
                 print_prompt();

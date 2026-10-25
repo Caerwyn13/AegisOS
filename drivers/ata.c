@@ -62,24 +62,26 @@ void ata_init() {
 
     uint8_t status = inb(ATA_PRIMARY_STATUS);
     if (status == 0) {
-        vga_printf("ATA: no drive detected\n");
+        vga_printf_colour(YELLOW, BLACK,
+                          "[  WARN ] ATA drive not detected\n");
         return;
     }
 
     ata_wait();
 
     if (inb(ATA_PRIMARY_STATUS) & ATA_STATUS_ERR) {
-        vga_printf("ATA: drive error\n");
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "[FAILED] ATA drive reported an error\n");
         return;
     }
 
     // read and discard identify data to clear the buffer
-    uint16_t buf[256];
     for (i = 0; i < 256; i++)
-        buf[i] = inw(ATA_PRIMARY_DATA);
+        (void)inw(ATA_PRIMARY_DATA);
 
     detected = 1;
-    vga_printf("ATA: drive detected\n");
+    vga_printf_colour(LIGHT_GREEN, BLACK,
+                      "[  OK  ] ATA drive detected\n");
 }
 
 int ata_read(uint32_t lba, uint8_t sectors, uint8_t *buf) {

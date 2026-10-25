@@ -7,6 +7,7 @@
 #include "heap.h"
 #include "paging.h"
 #include "string.h"
+#include "auth.h"
 
 #define SYSCALL_MAX_STRING 4096
 
@@ -60,6 +61,7 @@ static int sys_read(uint32_t name_address, uint32_t buffer_address,
                     uint32_t size_address) {
     char name[FS_MAX_NAME];
     if (copy_user_string(name_address, name, sizeof(name)) != 0 ||
+        auth_is_sensitive_file(name) ||
         !paging_user_range_accessible(size_address, sizeof(uint32_t), 1))
         return -1;
 
@@ -86,7 +88,9 @@ static int sys_read(uint32_t name_address, uint32_t buffer_address,
 static int sys_write(uint32_t name_address, uint32_t buffer_address,
                      uint32_t size) {
     char name[FS_MAX_NAME];
-    if (copy_user_string(name_address, name, sizeof(name)) != 0 ||
+    if (!auth_is_root() ||
+        copy_user_string(name_address, name, sizeof(name)) != 0 ||
+        auth_is_sensitive_file(name) ||
         size > FS_MAX_SIZE ||
         !paging_user_range_accessible(buffer_address, size, 0))
         return -1;
@@ -95,7 +99,9 @@ static int sys_write(uint32_t name_address, uint32_t buffer_address,
 
 static int sys_open(uint32_t name_address) {
     char name[FS_MAX_NAME];
-    if (copy_user_string(name_address, name, sizeof(name)) != 0)
+    if (!auth_is_root() ||
+        copy_user_string(name_address, name, sizeof(name)) != 0 ||
+        auth_is_sensitive_file(name))
         return -1;
     if (fs_exists(name)) return 0;
     return fs_create(name);

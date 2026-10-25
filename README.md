@@ -38,6 +38,7 @@ A simple x86 operating system written in C and NASM assembly.
 | `clear` | Clear the screen |
 | `clear -c <colour>` | Clear with a background colour |
 | `echo <text>` | Print text to the screen |
+| `fetch` | Show an AegisOS banner with uptime, free memory, and clock |
 | `rps <choice>` | Play rock-paper-scissors (`rock`, `paper`, or `scissors`) against AegisOS |
 | `net` | Show the network interface configuration |
 | `ping <IPv4\|hostname>` | Send four ICMP echo requests to an IPv4 address or resolve and ping a hostname |
@@ -61,6 +62,23 @@ A simple x86 operating system written in C and NASM assembly.
 | `about` | About AegisOS |
 | `reboot` | Reboot the system |
 | `shutdown` | Shutdown the system |
+| `logout` | End the current session and return to login |
+
+## Local Accounts
+
+On first boot, AegisOS asks you to set passwords for the `root` and `user`
+accounts. Passwords must be at least eight characters and are masked while
+typed. The account database is stored on AegisFS; AegisOS stores salted,
+iterated password hashes rather than the passwords themselves. Keep a copy of
+your disk image: account recovery and password changes are not implemented yet.
+
+The `user` account has a separate shell prompt and cannot run administrative
+commands or use userspace file-creation/write syscalls. Use `logout` to return
+to the login prompt. Root and user share the same filesystem; per-file
+ownership, home directories, `su`, and process-level privilege separation are
+not implemented. This early-stage login is useful for the OS's interactive
+shell, but should not be treated as a security boundary against malicious
+kernel or userspace code. Use it only in an isolated emulator.
 
 Available colours for `clear -c`: `black`, `blue`, `green`, `cyan`, `red`, `magenta`, `brown`, `grey`, `darkgrey`, `lightblue`, `lightgreen`, `lightcyan`, `lightred`, `lightmagenta`, `yellow`, `white`
 
