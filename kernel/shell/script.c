@@ -8,6 +8,7 @@
 #define SCRIPT_STRING_SIZE   128
 #define SCRIPT_FORMAT_SIZE   512
 #define SCRIPT_MAX_EXPRESSION_DEPTH 32
+#define SCRIPT_MAX_BLOCK_DEPTH 32
 
 typedef enum {
     VALUE_STRING,
@@ -32,6 +33,12 @@ typedef struct {
     char name[SCRIPT_NAME_SIZE];
     value_t value;
 } variable_t;
+
+typedef struct {
+    int parent_active;
+    int condition;
+    int has_else;
+} conditional_block_t;
 
 static uint8_t script_buffer[FS_MAX_SIZE];
 static variable_t variables[SCRIPT_MAX_VARIABLES];
@@ -60,7 +67,13 @@ enum {
     PARSE_ARITHMETIC_OVERFLOW = -18,
     PARSE_ASSIGNMENT_TYPE_MISMATCH = -19,
     PARSE_RESERVED_NAME = -20,
-    PARSE_EXPRESSION_TOO_DEEP = -21
+    PARSE_EXPRESSION_TOO_DEEP = -21,
+    PARSE_CONDITION_NOT_BOOL = -22,
+    PARSE_INVALID_COMPARISON = -23,
+    PARSE_INVALID_BLOCK = -24,
+    PARSE_BLOCK_TOO_DEEP = -25,
+    PARSE_UNCLOSED_BLOCK = -26,
+    PARSE_COMPARISON_TYPE_MISMATCH = -27
 };
 
 static int is_space(char c) {
@@ -82,7 +95,9 @@ static int is_name_char(char c) {
 
 static int is_reserved_name(const char *name) {
     return strcmp(name, "let") == 0 || strcmp(name, "print") == 0 ||
-           strcmp(name, "true") == 0 || strcmp(name, "false") == 0;
+           strcmp(name, "true") == 0 || strcmp(name, "false") == 0 ||
+           strcmp(name, "if") == 0 || strcmp(name, "else") == 0 ||
+           strcmp(name, "end") == 0;
 }
 
 static int parse_name(const uint8_t *line, uint32_t length, uint32_t *index,
@@ -740,6 +755,80 @@ static int parse_expression(const uint8_t *line, uint32_t length,
     return parse_expression_add(line, length, index, value, error_column);
 }
 
+static int compare_strings(const char *left, const char *right) {
+    while (*left && *left == *right) {
+        left++;
+        right++;
+    }
+    unsigned char left_char = (unsigned char)*left;
+    unsigned char right_char = (unsigned char)*right;
+    return left_char < right_char ? -1 : left_char > right_char ? 1 : 0;
+}
+
+static int compare_int_float(int32_t integer, int32_t float_milli) {
+    int32_t float_whole = float_milli / 1000;
+    int32_t float_fraction = float_milli % 1000;
+    if (integer != float_whole)
+        return integer < float_whole ? -1 : 1;
+    return float_fraction < 0 ? 1 : float_fraction > 0 ? -1 : 0;
+}
+
+static int compare_values(const value_t *left, const value_t *right,
+                          char comparison, int *result) {
+    int ordering;
+    int equality_only = comparison == '=' || comparison == '!';
+    int left_numeric = left->type == VALUE_INT || left->type == VALUE_FLOAT;
+    int right_numeric = right->type == VALUE_INT || right->type == VALUE_FLOAT;
+
+    if (left_numeric && right_numeric) {
+        if (left->type == VALUE_INT && right->type == VALUE_INT) {
+            ordering = left->data.integer < right->data.integer ? -1 :
+                       left->data.integer > right->data.integer ? 1 : 0;
+        } else if (left->type == VALUE_INT) {
+            ordering = compare_int_float(left->data.integer,
+                                         right->data.float_milli);
+        } else if (right->type == VALUE_INT) {
+            ordering = -compare_int_float(right->data.integer,
+                                          left->data.float_milli);
+        } else {
+            ordering = left->data.float_milli < right->data.float_milli ? -1 :
+                       left->data.float_milli > right->data.float_milli ? 1 : 0;
+        }
+    } else if (left->type != right->type) {
+        return PARSE_COMPARISON_TYPE_MISMATCH;
+    } else if (left->type == VALUE_STRING) {
+        if (!equality_only)
+            return PARSE_COMPARISON_TYPE_MISMATCH;
+        ordering = compare_strings(left->data.string, right->data.string);
+    } else if (left->type == VALUE_BOOL) {
+        if (!equality_only)
+            return PARSE_COMPARISON_TYPE_MISMATCH;
+        ordering = left->data.boolean < right->data.boolean ? -1 :
+                   left->data.boolean > right->data.boolean ? 1 : 0;
+    } else if (left->type == VALUE_CHAR) {
+        unsigned char left_char = (unsigned char)left->data.character;
+        unsigned char right_char = (unsigned char)right->data.character;
+        ordering = left_char < right_char ? -1 :
+                   left_char > right_char ? 1 : 0;
+    } else {
+        return PARSE_COMPARISON_TYPE_MISMATCH;
+    }
+
+    if (comparison == '=')
+        *result = ordering == 0;
+    else if (comparison == '!')
+        *result = ordering != 0;
+    else if (comparison == '<')
+        *result = ordering < 0;
+    else if (comparison == 'l')
+        *result = ordering <= 0;
+    else if (comparison == '>')
+        *result = ordering > 0;
+    else
+        *result = ordering >= 0;
+    return 0;
+}
+
 static void print_value(const value_t *value) {
     switch (value->type) {
         case VALUE_STRING:
@@ -787,6 +876,68 @@ static int statement_end(const uint8_t *line, uint32_t length, uint32_t index,
         return PARSE_TRAILING_TEXT;
     }
     return 0;
+}
+
+static int parse_condition(const uint8_t *line, uint32_t length,
+                           uint32_t index, int *condition,
+                           uint32_t *error_column) {
+    uint32_t condition_column = index + 1;
+    value_t left;
+    int status = parse_expression(line, length, &index, &left, error_column);
+    if (status != 0)
+        return status;
+
+    skip_space(line, length, &index);
+    uint32_t operator_column = index + 1;
+    char comparison;
+    if (index + 1 < length && line[index] == '=' && line[index + 1] == '=') {
+        comparison = '=';
+        index += 2;
+    } else if (index + 1 < length && line[index] == '!' &&
+               line[index + 1] == '=') {
+        comparison = '!';
+        index += 2;
+    } else if (index + 1 < length && line[index] == '<' &&
+               line[index + 1] == '=') {
+        comparison = 'l';
+        index += 2;
+    } else if (index + 1 < length && line[index] == '>' &&
+               line[index + 1] == '=') {
+        comparison = 'g';
+        index += 2;
+    } else if (index < length && line[index] == '<') {
+        comparison = '<';
+        index++;
+    } else if (index < length && line[index] == '>') {
+        comparison = '>';
+        index++;
+    } else {
+        if (index < length && (line[index] == '=' || line[index] == '!')) {
+            *error_column = index + 1;
+            return PARSE_INVALID_COMPARISON;
+        }
+        status = statement_end(line, length, index, error_column);
+        if (status != 0)
+            return status;
+        if (left.type != VALUE_BOOL) {
+            *error_column = condition_column;
+            return PARSE_CONDITION_NOT_BOOL;
+        }
+        *condition = left.data.boolean;
+        return 0;
+    }
+
+    value_t right;
+    status = parse_expression(line, length, &index, &right, error_column);
+    if (status != 0)
+        return status;
+    status = statement_end(line, length, index, error_column);
+    if (status != 0)
+        return status;
+    status = compare_values(&left, &right, comparison, condition);
+    if (status != 0)
+        *error_column = operator_column;
+    return status;
 }
 
 static int parse_print(const uint8_t *line, uint32_t length, uint32_t index,
@@ -913,7 +1064,8 @@ static int parse_assignment(const uint8_t *line, uint32_t length,
 }
 
 static int parse_line(const uint8_t *line, uint32_t length,
-                      uint32_t *error_column) {
+                      conditional_block_t blocks[], uint32_t *block_depth,
+                      int *active, uint32_t *error_column) {
     uint32_t index = 0;
     skip_space(line, length, &index);
     if (index == length || line[index] == '#')
@@ -921,13 +1073,69 @@ static int parse_line(const uint8_t *line, uint32_t length,
 
     char keyword[SCRIPT_NAME_SIZE];
     if (parse_name(line, length, &index, keyword, error_column) != 0)
-        return PARSE_INVALID_STATEMENT;
+        return *active ? PARSE_INVALID_STATEMENT : 0;
+    uint32_t keyword_end = index;
     skip_space(line, length, &index);
+
+    if (strcmp(keyword, "if") == 0) {
+        if (*block_depth >= SCRIPT_MAX_BLOCK_DEPTH) {
+            *error_column = 1;
+            return PARSE_BLOCK_TOO_DEEP;
+        }
+        conditional_block_t *block = &blocks[*block_depth];
+        block->parent_active = *active;
+        block->has_else = 0;
+        block->condition = 0;
+        if (block->parent_active) {
+            int status = parse_condition(line, length, index,
+                                         &block->condition, error_column);
+            if (status != 0)
+                return status;
+        }
+        (*block_depth)++;
+        *active = block->parent_active && block->condition;
+        return 0;
+    }
+
+    if (strcmp(keyword, "else") == 0) {
+        if (!*block_depth) {
+            *error_column = 1;
+            return PARSE_INVALID_BLOCK;
+        }
+        int status = statement_end(line, length, index, error_column);
+        if (status != 0)
+            return status;
+        conditional_block_t *block = &blocks[*block_depth - 1];
+        if (block->has_else) {
+            *error_column = 1;
+            return PARSE_INVALID_BLOCK;
+        }
+        block->has_else = 1;
+        *active = block->parent_active && !block->condition;
+        return 0;
+    }
+
+    if (strcmp(keyword, "end") == 0) {
+        if (!*block_depth) {
+            *error_column = 1;
+            return PARSE_INVALID_BLOCK;
+        }
+        int status = statement_end(line, length, index, error_column);
+        if (status != 0)
+            return status;
+        (*block_depth)--;
+        *active = blocks[*block_depth].parent_active;
+        return 0;
+    }
+
+    if (!*active)
+        return 0;
+
     if (strcmp(keyword, "print") == 0)
         return parse_print(line, length, index, error_column);
     if (strcmp(keyword, "let") == 0)
         return parse_let(line, length, index, error_column);
-    return parse_assignment(line, length, index, keyword, error_column);
+    return parse_assignment(line, length, keyword_end, keyword, error_column);
 }
 
 static const char *parse_error_message(int status) {
@@ -952,6 +1160,12 @@ static const char *parse_error_message(int status) {
         case PARSE_ASSIGNMENT_TYPE_MISMATCH: return "assignment type does not match variable";
         case PARSE_RESERVED_NAME: return "name is reserved by the language";
         case PARSE_EXPRESSION_TOO_DEEP: return "expression nesting limit reached";
+        case PARSE_CONDITION_NOT_BOOL: return "condition must be a Bool or comparison";
+        case PARSE_INVALID_COMPARISON: return "expected a comparison operator";
+        case PARSE_COMPARISON_TYPE_MISMATCH: return "values cannot be compared with this operator";
+        case PARSE_INVALID_BLOCK: return "unexpected or duplicate else/end";
+        case PARSE_BLOCK_TOO_DEEP: return "conditional nesting limit reached";
+        case PARSE_UNCLOSED_BLOCK: return "conditional block is missing end";
         default: return "invalid statement";
     }
 }
@@ -968,6 +1182,9 @@ int script_run_file(const char *filename) {
     variable_count = 0;
     expression_depth = 0;
 
+    conditional_block_t blocks[SCRIPT_MAX_BLOCK_DEPTH];
+    uint32_t block_depth = 0;
+    int active = 1;
     uint32_t line_number = 1;
     uint32_t line_start = 0;
     while (line_start < size) {
@@ -977,7 +1194,8 @@ int script_run_file(const char *filename) {
 
         uint32_t error_column = 0;
         int status = parse_line(script_buffer + line_start,
-                                line_end - line_start, &error_column);
+                                line_end - line_start, blocks, &block_depth,
+                                &active, &error_column);
         if (status < 0) {
             vga_printf_colour(LIGHT_RED, BLACK,
                               "run: %s:%u:%u: %s\n",
@@ -988,6 +1206,13 @@ int script_run_file(const char *filename) {
 
         line_start = line_end + (line_end < size ? 1 : 0);
         line_number++;
+    }
+    if (block_depth) {
+        vga_printf_colour(LIGHT_RED, BLACK,
+                          "run: %s:%u:1: %s\n",
+                          filename, line_number,
+                          parse_error_message(PARSE_UNCLOSED_BLOCK));
+        return -1;
     }
     return 0;
 }

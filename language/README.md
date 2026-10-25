@@ -3,7 +3,7 @@
 Aegis is a small interpreted language built into AegisOS. Scripts are saved as
 ordinary text files (often with the `.aeg` extension) in AegisFS and run with
 the shell's `run` command. The language supports variables, printing, blank
-lines, and comments.
+lines, comments, and conditional `if`/`else` blocks.
 
 ## Quick start
 
@@ -71,8 +71,8 @@ Type names are case-sensitive. An explicit type must match the expression's
 result type.
 Variable names begin with a letter or underscore and may then contain letters,
 digits, and underscores. A variable can only be declared once in a script.
-The names `let`, `print`, `true`, and `false` are reserved. Variables exist
-only for the duration of one `run` command.
+The names `let`, `print`, `true`, `false`, `if`, `else`, and `end` are
+reserved. Variables exist only for the duration of one `run` command.
 
 `Int` values are signed 32-bit integers. `Float` values are stored as
 fixed-point numbers with up to three decimal places; they are not hardware
@@ -112,6 +112,29 @@ print count
 
 The assigned expression must have the same type as the variable. Variables
 must be declared before they are used or reassigned.
+
+### Conditions
+
+Use `if`, optional `else`, and `end` on separate lines to conditionally run
+statements:
+
+```aegis
+let score = 12
+if score >= 10
+    print "You passed"
+else
+    print "Try again"
+end
+```
+
+Conditions may be a `Bool` variable or literal, or a comparison using `==`,
+`!=`, `<`, `<=`, `>`, or `>=`. Comparisons work with numeric values; `Int` and
+`Float` values can be compared with each other. Strings support `==` and `!=`,
+and `Bool` values support `==` and `!=`. `Char` values support all six
+comparisons. Other type combinations and unsupported operators report an
+error. A conditional block may contain another conditional block; nesting is
+limited to 32 levels. Each `if` must end with `end`, and may have at most one
+`else`. Statements in the unselected branch are skipped.
 
 ### `print`
 
@@ -174,4 +197,4 @@ When a line is invalid, `run` reports the script filename, line, and column,
 then stops. The script is read from AegisFS and is limited to the filesystem's
 maximum file size of 32 KiB.
 
-Conditions, loops, and user-defined functions are not supported yet.
+Loops and user-defined functions are not supported yet.
